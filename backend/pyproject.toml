@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27,<2.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aws-cost-optimization-automation"
+version = "0.1.0"
+description = "Approval-gated AWS cost optimization automation platform."
+requires-python = ">=3.13,<3.15"
+dependencies = [
+  "boto3>=1.36,<2.0",
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.34,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1.0",
+  "mypy>=1.14,<2.0",
+  "pytest>=8.3,<10.0",
+  "pytest-cov>=6.0,<8.0",
+  "ruff>=0.9,<1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cost_optimization"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --cov=cost_optimization --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+packages = ["cost_optimization"]

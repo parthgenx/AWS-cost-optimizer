@@ -1,0 +1,9 @@
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      COST_OPTIMIZER_ENVIRONMENT: development
+      COST_OPTIMIZER_LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"

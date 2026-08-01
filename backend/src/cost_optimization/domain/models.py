@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -16,6 +17,17 @@ class ResourceType(StrEnum):
     EBS_VOLUME = "ebs_volume"
     ELASTIC_IP = "elastic_ip"
     EBS_SNAPSHOT = "ebs_snapshot"
+
+
+class EbsVolumeState(StrEnum):
+    """Relevant EBS volume states returned by the EC2 API."""
+
+    CREATING = "creating"
+    AVAILABLE = "available"
+    IN_USE = "in-use"
+    DELETING = "deleting"
+    DELETED = "deleted"
+    ERROR = "error"
 
 
 class FindingStatus(StrEnum):
@@ -59,6 +71,25 @@ class ResourceReference(BaseModel):
     resource_id: str = Field(min_length=1, max_length=512)
     region: str = Field(min_length=1, max_length=64)
     account_id: str = Field(pattern=r"^\d{12}$")
+
+
+class EbsVolume(BaseModel):
+    """Provider-neutral representation of the EBS fields needed by the rule."""
+
+    resource: ResourceReference
+    state: EbsVolumeState
+    size_gib: int = Field(gt=0)
+    created_at: datetime
+    volume_type: str = Field(min_length=1, max_length=32)
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_ebs_resource(cls, value: ResourceReference) -> ResourceReference:
+        """Prevent accidentally evaluating another AWS resource as an EBS volume."""
+        if value.resource_type is not ResourceType.EBS_VOLUME:
+            raise ValueError("EbsVolume.resource.resource_type must be ebs_volume")
+        return value
 
 
 class FindingCandidate(BaseModel):

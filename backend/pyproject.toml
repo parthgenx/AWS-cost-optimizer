@@ -41,3 +41,7 @@ python_version = "3.13"
 strict = true
 warn_unreachable = true
 packages = ["cost_optimization"]
+
+[[tool.mypy.overrides]]
+module = ["boto3", "botocore.*"]
+ignore_missing_imports = true

@@ -3,9 +3,9 @@
 An approval-gated platform for discovering unused AWS resources, estimating
 potential monthly savings, and coordinating safe cleanup operations.
 
-The project is intentionally built in small, reviewable milestones. Its first
-milestone establishes the backend engineering foundation; it does not yet query
-AWS or perform resource cleanup.
+The project is intentionally built in small, reviewable milestones. It now
+includes a read-only EBS volume detection slice; it does not yet persist,
+notify about, or clean up resources.
 
 ## Repository layout
 
@@ -16,9 +16,9 @@ AWS or perform resource cleanup.
 
 ## Current milestone
 
-Milestone 1 provides a typed FastAPI application, `GET /health`, centralized
-configuration, JSON structured logging, domain primitives, Docker support, and
-automated quality checks.
+Milestone 2 adds paginated boto3 EBS discovery, a configurable unattached-volume
+rule, a transparent reference-rate savings estimate, and universal resource
+exclusions via `cost-optimizer:exclude=true`.
 
 See [the architecture](docs/architecture.md) and
 [the milestone plan](docs/milestones.md) before changing the design.

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class Environment(StrEnum):
@@ -25,6 +26,8 @@ class Settings(BaseModel):
     environment: Environment = Environment.DEVELOPMENT
     log_level: str = "INFO"
     version: str = "0.1.0"
+    ebs_unattached_minimum_volume_age_days: int = Field(default=14, ge=1, le=3650)
+    ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
 
     @field_validator("log_level")
     @classmethod
@@ -40,13 +43,19 @@ class Settings(BaseModel):
     @classmethod
     def from_environment(cls) -> Settings:
         """Build settings from the process environment."""
-        return cls(
-            service_name=os.getenv("COST_OPTIMIZER_SERVICE_NAME", "cost-optimization-api"),
-            environment=Environment(
-                os.getenv("COST_OPTIMIZER_ENVIRONMENT", Environment.DEVELOPMENT)
-            ),
-            log_level=os.getenv("COST_OPTIMIZER_LOG_LEVEL", "INFO"),
-            version=os.getenv("COST_OPTIMIZER_VERSION", "0.1.0"),
+        return cls.model_validate(
+            {
+                "service_name": os.getenv("COST_OPTIMIZER_SERVICE_NAME", "cost-optimization-api"),
+                "environment": os.getenv("COST_OPTIMIZER_ENVIRONMENT", Environment.DEVELOPMENT),
+                "log_level": os.getenv("COST_OPTIMIZER_LOG_LEVEL", "INFO"),
+                "version": os.getenv("COST_OPTIMIZER_VERSION", "0.1.0"),
+                "ebs_unattached_minimum_volume_age_days": os.getenv(
+                    "COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS", "14"
+                ),
+                "ebs_reference_gib_monthly_rate_usd": os.getenv(
+                    "COST_OPTIMIZER_EBS_REFERENCE_GIB_MONTHLY_RATE_USD", "0.08"
+                ),
+            }
         )
 
 

@@ -1,0 +1,1 @@
+"""Pure, configurable detection rules."""

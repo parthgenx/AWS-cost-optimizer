@@ -16,9 +16,10 @@ notify about, or clean up resources.
 
 ## Current milestone
 
-Milestone 2 adds paginated boto3 EBS discovery, a configurable unattached-volume
-rule, a transparent reference-rate savings estimate, and universal resource
-exclusions via `cost-optimizer:exclude=true`.
+Milestone 3 adds durable, idempotent DynamoDB finding storage and scan-run
+records. The prior milestone added paginated boto3 EBS discovery, a configurable
+unattached-volume rule, a transparent reference-rate savings estimate, and
+universal exclusions via `cost-optimizer:exclude=true`.
 
 See [the architecture](docs/architecture.md) and
 [the milestone plan](docs/milestones.md) before changing the design.

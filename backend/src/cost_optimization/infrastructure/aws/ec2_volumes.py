@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 import boto3
+from botocore.config import Config
 
 from cost_optimization.domain.models import (
     EbsVolume,
@@ -35,8 +36,12 @@ class AwsResponseFormatError(ValueError):
 
 
 def create_ec2_client(region: str) -> Ec2VolumesClient:
-    """Create an EC2 client; this is the only boto3 client construction point."""
-    client = boto3.client("ec2", region_name=region)
+    """Create an EC2 client with bounded retries for throttling and transient failures."""
+    client = boto3.client(
+        "ec2",
+        region_name=region,
+        config=Config(retries={"mode": "standard", "max_attempts": 5}),
+    )
     return cast(Ec2VolumesClient, client)
 
 

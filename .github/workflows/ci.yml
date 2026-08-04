@@ -27,3 +27,7 @@ jobs:
         run: mypy src
       - name: Test
         run: pytest
+      - uses: aws-actions/setup-sam@v2
+      - name: Validate AWS SAM template
+        working-directory: .
+        run: sam validate --template infrastructure/template.yaml

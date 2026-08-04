@@ -31,3 +31,19 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.log_level == "WARNING"
     assert settings.ebs_unattached_minimum_volume_age_days == 21
     assert settings.ebs_reference_gib_monthly_rate_usd == Decimal("0.10")
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        (Settings(), "AWS_REGION"),
+        (Settings(aws_region="ap-south-1"), "FINDINGS_TABLE_NAME"),
+        (
+            Settings(aws_region="ap-south-1", findings_table_name="findings-table"),
+            "SCAN_RUNS_TABLE_NAME",
+        ),
+    ],
+)
+def test_settings_reject_incomplete_scanner_configuration(settings: Settings, message: str) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        settings.require_scanner_configuration()

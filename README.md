@@ -208,6 +208,7 @@ cd backend
 - [Milestone plan](docs/milestones.md)
 - [Layered backend decision record](docs/decisions/0001-layered-backend.md)
 - [Unattached EBS volume rule](docs/rules/unattached-ebs-volumes.md)
+- [Deployment foundation](docs/deployment.md)
 
 ## Development workflow
 

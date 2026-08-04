@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Deployable foundation for the AWS Cost Optimization Automation System.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment environment name.
+
+Resources:
+  FindingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aws-cost-optimizer-findings-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: finding_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: finding_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  ScanRunsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aws-cost-optimizer-scan-runs-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: scan_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: scan_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  EbsScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-ebs-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.ebs_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 60
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: ebs-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+      Policies:
+        - Statement:
+            - Sid: DescribeEbsVolumes
+              Effect: Allow
+              Action:
+                - ec2:DescribeVolumes
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+
+  EbsScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${EbsScannerFunction}"
+      RetentionInDays: 30
+
+Outputs:
+  EbsScannerFunctionName:
+    Description: Lambda function name for manual scan invocation.
+    Value: !Ref EbsScannerFunction
+  FindingsTableName:
+    Description: DynamoDB table that stores deduplicated findings.
+    Value: !Ref FindingsTable
+  ScanRunsTableName:
+    Description: DynamoDB table that stores scan execution records.
+    Value: !Ref ScanRunsTable

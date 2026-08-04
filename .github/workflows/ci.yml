@@ -8,22 +8,37 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_DEFAULT_REGION: ap-south-1
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+
       - name: Lint
         run: ruff check src tests
+
       - name: Type check
         run: mypy src
+
       - name: Test
         run: pytest
+
+      - uses: aws-actions/setup-sam@v2
+
+      - name: Validate AWS SAM template
+        working-directory: .
+        run: sam validate --template infrastructure/template.yaml

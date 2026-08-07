@@ -174,6 +174,123 @@ cd backend
 .venv/bin/pytest
 ```
 
+## AWS development lifecycle: deploy, verify, and clean up
+
+This section describes the complete development-environment lifecycle. The
+application is deployed only when you explicitly run the deployment command;
+Docker alone never creates AWS resources or AWS charges.
+
+### Prerequisites
+
+- Docker Desktop is running.
+- The AWS CLI is authenticated to the AWS account you intend to scan.
+- AWS SAM CLI is installed.
+- Your selected region is `ap-south-1`, or you replace it consistently in the
+  commands below.
+
+Confirm the local tooling before deployment:
+
+```bash
+docker info
+aws sts get-caller-identity
+sam validate --template infrastructure/template.yaml
+```
+
+### Start a development deployment
+
+From the repository root, build the Lambda package inside Docker. This is
+required because Lambda runs Linux while local development may run on macOS.
+
+```bash
+SAM_CLI_TELEMETRY=0 sam build \
+  --template-file infrastructure/template.yaml \
+  --use-container
+```
+
+Deploy the built package. The command creates the `aws-cost-optimizer-dev`
+CloudFormation stack, including the scanner Lambda, DynamoDB tables, and
+CloudWatch log group.
+
+```bash
+SAM_CLI_TELEMETRY=0 sam deploy \
+  --template-file .aws-sam/build/template.yaml \
+  --stack-name aws-cost-optimizer-dev \
+  --region ap-south-1 \
+  --parameter-overrides Environment=dev \
+  --capabilities CAPABILITY_IAM \
+  --resolve-s3 \
+  --no-confirm-changeset
+```
+
+`--resolve-s3` lets SAM create or reuse its deployment-artifact bucket. The
+bucket is not an application runtime service. SAM removes this application's
+artifacts during cleanup; an empty shared bucket does not incur S3 storage
+charges.
+
+### Verify one EBS scan
+
+Invoke the scanner once, then read the Lambda response:
+
+```bash
+aws lambda invoke \
+  --function-name aws-cost-optimizer-ebs-scanner-dev \
+  --region ap-south-1 \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{}' \
+  /tmp/ebs-scan-response.json
+
+cat /tmp/ebs-scan-response.json
+```
+
+To inspect the structured logs in CloudWatch from the terminal:
+
+```bash
+aws logs tail /aws/lambda/aws-cost-optimizer-ebs-scanner-dev \
+  --region ap-south-1 \
+  --since 10m
+```
+
+### Stop AWS resources and ongoing project charges
+
+When you are finished testing, run:
+
+```bash
+./scripts/cleanup-dev.sh --region ap-south-1
+```
+
+The script displays the target account and asks you to type `DELETE`. It then
+removes the complete `aws-cost-optimizer-dev` stack and its SAM-managed
+deployment artifacts, and verifies that the stack no longer exists. It removes
+all AWS resources created by this project in that region.
+
+AWS billing data can be delayed, so a final charge for time already used may
+appear later. After successful cleanup, however, no deployed project resources
+remain to generate ongoing charges.
+
+### Docker and local cleanup
+
+SAM creates a short-lived Docker build container. It exits automatically when
+`sam build --use-container` finishes, so there is no Docker container to keep
+running or stop later. Docker images and `.aws-sam/` build artifacts remain on
+your computer only; they use local disk space and never create AWS charges.
+
+Optional local-disk cleanup, run from the repository root:
+
+```bash
+docker image rm public.ecr.aws/sam/build-python3.13:latest-arm64
+rm -rf .aws-sam
+```
+
+These commands remove only the cached Lambda build image and local SAM build
+output. They do not change AWS resources or source code.
+
+### Start again after cleanup
+
+There is nothing to "turn back on." Open Docker Desktop, authenticate the AWS
+CLI if necessary, then repeat the **Start a development deployment** commands.
+CloudFormation recreates a fresh development environment from
+`infrastructure/template.yaml`.
+
 ## Configuration
 
 | Variable | Default | Purpose |

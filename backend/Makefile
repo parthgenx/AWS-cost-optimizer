@@ -1,2 +1,2 @@
 build-EbsScannerFunction:
-	python -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .
+	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .

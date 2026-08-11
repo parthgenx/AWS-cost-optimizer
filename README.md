@@ -152,9 +152,8 @@ DynamoDB writes are designed to be atomic and idempotent.
 ### Run the API
 
 ```bash
-cd backend
-python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
+python3 -m venv .venv
+.venv/bin/python -m pip install -e "backend[dev]"
 .venv/bin/uvicorn cost_optimization.api.main:app --reload
 ```
 
@@ -168,11 +167,16 @@ http://localhost:8000/health
 
 ```bash
 cd backend
-.venv/bin/ruff format --check src tests
-.venv/bin/ruff check src tests
-.venv/bin/mypy src
-.venv/bin/pytest
+../.venv/bin/ruff format --check src tests
+../.venv/bin/ruff check src tests
+../.venv/bin/mypy src
+../.venv/bin/pytest
 ```
+
+The virtual environment is intentionally stored at the repository root, not in
+`backend/`. AWS SAM treats `backend/` as Lambda deployment source, so keeping
+developer-only dependencies outside it prevents local macOS files from entering
+the Linux Lambda build.
 
 ## AWS development lifecycle: deploy, verify, and clean up
 

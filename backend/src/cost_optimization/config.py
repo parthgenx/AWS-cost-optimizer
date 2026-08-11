@@ -43,6 +43,14 @@ class Settings(BaseModel):
             raise ValueError(message)
         return normalized
 
+    @field_validator("environment", mode="before")
+    @classmethod
+    def normalize_deployment_environment(cls, value: object) -> object:
+        """Translate short infrastructure environment labels to canonical values."""
+        if isinstance(value, str):
+            return {"dev": "development", "prod": "production"}.get(value.lower(), value)
+        return value
+
     @classmethod
     def from_environment(cls) -> Settings:
         """Build settings from the process environment."""

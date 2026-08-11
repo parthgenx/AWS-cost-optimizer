@@ -34,6 +34,21 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.parametrize(
+    ("deployment_environment", "expected_environment"),
+    [
+        ("dev", Environment.DEVELOPMENT),
+        ("prod", Environment.PRODUCTION),
+    ],
+)
+def test_settings_normalize_deployment_environment_aliases(
+    deployment_environment: str, expected_environment: Environment
+) -> None:
+    settings = Settings(environment=deployment_environment)
+
+    assert settings.environment is expected_environment
+
+
+@pytest.mark.parametrize(
     ("settings", "message"),
     [
         (Settings(), "AWS_REGION"),

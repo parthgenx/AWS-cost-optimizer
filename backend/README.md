@@ -10,8 +10,8 @@ the dependency set.
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-.venv/bin/uvicorn cost_optimization.api.main:app --reload
+../.venv/bin/python -m pip install -e ".[dev]"
+../.venv/bin/uvicorn cost_optimization.api.main:app --reload
 ```
 
 The health endpoint is available at `http://localhost:8000/health`.
@@ -36,9 +36,9 @@ that the volume has been unattached for the whole threshold period.
 ## Quality checks
 
 ```bash
-.venv/bin/ruff check src tests
-.venv/bin/mypy src
-.venv/bin/pytest
+../.venv/bin/ruff check src tests
+../.venv/bin/mypy src
+../.venv/bin/pytest
 ```
 
 ## Dependency rationale

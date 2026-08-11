@@ -30,6 +30,13 @@ specific resource ARN, so it necessarily uses `Resource: "*"`.
 No permissions to delete EBS volumes, release IPs, alter RDS, or modify load
 balancers are granted.
 
+## Environment naming
+
+The SAM stack uses concise deployment labels (`dev`, `staging`, and `prod`) in
+resource names. The application configuration normalizes `dev` to
+`development` and `prod` to `production` before validation, so Python code
+always receives a canonical environment value.
+
 ## Local validation
 
 After AWS SAM CLI is installed, validate and build from the repository root:

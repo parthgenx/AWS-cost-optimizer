@@ -33,14 +33,17 @@ when deploying:
 
 ```bash
 sam deploy ... \
-  --parameter-overrides Environment=dev ScheduledScansEnabled=true \
-  NotificationEmail=operator@example.com
+  --parameter-overrides \
+  'Environment=dev ScheduledScansEnabled=true NotificationEmail=operator@example.com'
 ```
 
 `ScanScheduleExpression` defaults to 03:00 UTC every Sunday and can be
-overridden with a valid EventBridge schedule expression. EventBridge retries a
-failed Lambda invocation up to three times for one hour. After that, it writes
-the original event to the encrypted SQS dead-letter queue for investigation.
+overridden with a valid EventBridge schedule expression. Keep the full
+parameter-override string quoted when the expression contains spaces, for
+example: `'Environment=dev ScheduledScansEnabled=true
+ScanScheduleExpression="rate(1 hour)"'`. EventBridge retries a failed Lambda
+invocation up to three times for one hour. After that, it writes the original
+event to the encrypted SQS dead-letter queue for investigation.
 
 SNS notifications are sent only when a completed scan has one or more findings.
 This avoids routine “nothing found” email noise. Email recipients must confirm

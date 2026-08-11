@@ -237,14 +237,20 @@ overrides to the deployment command:
 
 ```bash
 --parameter-overrides \
-  Environment=dev \
-  ScheduledScansEnabled=true \
-  NotificationEmail=operator@example.com
+  'Environment=dev ScheduledScansEnabled=true NotificationEmail=operator@example.com'
 ```
 
 The recipient must confirm the SNS email subscription. Notifications are sent
 only when a scan finds potential savings. Failed scheduled invocations are
 retried by EventBridge and then placed in the SQS dead-letter queue.
+
+To override the schedule, keep the complete override string quoted because an
+EventBridge expression contains spaces:
+
+```bash
+--parameter-overrides \
+  'Environment=dev ScheduledScansEnabled=true ScanScheduleExpression="rate(1 hour)"'
+```
 
 ### Verify one EBS scan
 

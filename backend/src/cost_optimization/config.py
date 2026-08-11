@@ -29,6 +29,7 @@ class Settings(BaseModel):
     aws_region: str | None = Field(default=None, min_length=1, max_length=64)
     findings_table_name: str | None = Field(default=None, min_length=3, max_length=255)
     scan_runs_table_name: str | None = Field(default=None, min_length=3, max_length=255)
+    scan_notifications_topic_arn: str | None = Field(default=None, min_length=1, max_length=2048)
     ebs_unattached_minimum_volume_age_days: int = Field(default=14, ge=1, le=3650)
     ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
 
@@ -63,6 +64,9 @@ class Settings(BaseModel):
                 "aws_region": os.getenv("AWS_REGION"),
                 "findings_table_name": os.getenv("COST_OPTIMIZER_FINDINGS_TABLE_NAME"),
                 "scan_runs_table_name": os.getenv("COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME"),
+                "scan_notifications_topic_arn": os.getenv(
+                    "COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN"
+                ),
                 "ebs_unattached_minimum_volume_age_days": os.getenv(
                     "COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS", "14"
                 ),

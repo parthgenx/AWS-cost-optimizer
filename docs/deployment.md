@@ -2,9 +2,10 @@
 
 ## What this milestone deploys
 
-The SAM template creates two on-demand DynamoDB tables and one manually
-invokable EBS scanner Lambda function. It does not create a schedule, send a
-notification, expose an API endpoint, or permit any delete operation.
+The SAM template creates two on-demand DynamoDB tables, an EBS scanner Lambda,
+an SNS notification topic, an EventBridge schedule rule, and an SQS
+dead-letter queue. It does not expose an API endpoint or permit any delete
+operation.
 
 ## Why AWS SAM
 
@@ -14,12 +15,38 @@ without adding an infrastructure framework that would obscure the project.
 
 ## Lambda flow
 
-1. A caller manually invokes the EBS scanner Lambda.
+1. A caller manually invokes the EBS scanner Lambda, or EventBridge invokes it
+   when scheduled scans are enabled.
 2. The handler gets region and table names from environment variables.
 3. It extracts the AWS account ID from Lambda's invocation ARN, avoiding an
    extra STS API permission.
 4. It wires the existing boto3 EBS adapter, pure rule, and DynamoDB repositories.
-5. It returns a small scan summary and writes structured logs to CloudWatch.
+5. It emits scan metrics through structured CloudWatch logs.
+6. If findings exist, it publishes a compact summary to SNS.
+7. It returns a small scan summary and writes structured logs to CloudWatch.
+
+## Scheduled scans and notifications
+
+Scheduled scans are disabled by default. This prevents unexpected background
+activity in a newly deployed development environment. Enable them deliberately
+when deploying:
+
+```bash
+sam deploy ... \
+  --parameter-overrides Environment=dev ScheduledScansEnabled=true \
+  NotificationEmail=operator@example.com
+```
+
+`ScanScheduleExpression` defaults to 03:00 UTC every Sunday and can be
+overridden with a valid EventBridge schedule expression. EventBridge retries a
+failed Lambda invocation up to three times for one hour. After that, it writes
+the original event to the encrypted SQS dead-letter queue for investigation.
+
+SNS notifications are sent only when a completed scan has one or more findings.
+This avoids routine “nothing found” email noise. Email recipients must confirm
+the SNS subscription before receiving messages. A failure to publish a
+notification is logged and metered but does not rerun a scan that already
+completed successfully.
 
 ## IAM boundary
 

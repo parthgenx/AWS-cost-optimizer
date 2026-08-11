@@ -32,7 +32,7 @@ Every destructive action will require explicit approval and a final live AWS-sta
 | Persistence | Findings and scan-run records | Implemented |
 | Safety | Resource exclusion tags | Implemented |
 | Safety | Approval, dry-run, and revalidation | Planned |
-| Operations | EventBridge, SNS, and CloudWatch integration | Planned |
+| Operations | Scheduled EBS scans, SNS finding notifications, retry/DLQ, and CloudWatch metrics | Implemented |
 
 EC2, RDS, and load-balancer findings will be recommendations—not automatic cleanup candidates. Low activity does not prove that a production workload is safe to remove.
 
@@ -230,6 +230,21 @@ SAM_CLI_TELEMETRY=0 sam deploy \
 bucket is not an application runtime service. SAM removes this application's
 artifacts during cleanup; an empty shared bucket does not incur S3 storage
 charges.
+
+Scheduled scans are disabled by default. To enable the weekly EventBridge scan
+and subscribe an email recipient to finding notifications, add these parameter
+overrides to the deployment command:
+
+```bash
+--parameter-overrides \
+  Environment=dev \
+  ScheduledScansEnabled=true \
+  NotificationEmail=operator@example.com
+```
+
+The recipient must confirm the SNS email subscription. Notifications are sent
+only when a scan finds potential savings. Failed scheduled invocations are
+retried by EventBridge and then placed in the SQS dead-letter queue.
 
 ### Verify one EBS scan
 

@@ -11,6 +11,25 @@ Parameters:
       - staging
       - prod
     Description: Deployment environment name.
+  ScheduledScansEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable the EventBridge schedule for automatic EBS scans.
+  ScanScheduleExpression:
+    Type: String
+    Default: "cron(0 3 ? * SUN *)"
+    Description: EventBridge schedule expression for automatic EBS scans (UTC).
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for SNS finding notifications. The recipient must confirm the subscription.
+
+Conditions:
+  ScheduledScansEnabledCondition: !Equals [!Ref ScheduledScansEnabled, "true"]
+  NotificationEmailConfigured: !Not [!Equals [!Ref NotificationEmail, ""]]
 
 Resources:
   FindingsTable:
@@ -65,6 +84,7 @@ Resources:
           COST_OPTIMIZER_SERVICE_NAME: ebs-scanner
           COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
           COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
       Policies:
         - Statement:
             - Sid: DescribeEbsVolumes
@@ -83,12 +103,80 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:UpdateItem
               Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
 
   EbsScannerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${EbsScannerFunction}"
       RetentionInDays: 30
+
+  ScanNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "aws-cost-optimizer-scan-notifications-${Environment}"
+
+  NotificationEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: NotificationEmailConfigured
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref ScanNotificationsTopic
+
+  ScheduledScanDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "aws-cost-optimizer-scheduled-scan-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ScheduledScanDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ScheduledScanDeadLetterQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToWriteFailedScheduledScans
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ScheduledScanDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScheduledEbsScanRule.Arn
+
+  ScheduledEbsScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aws-cost-optimizer-ebs-scan-${Environment}"
+      Description: !Sub "Runs the EBS cost-optimization scan for ${Environment}."
+      ScheduleExpression: !Ref ScanScheduleExpression
+      State: !If [ScheduledScansEnabledCondition, ENABLED, DISABLED]
+      Targets:
+        - Id: EbsScanner
+          Arn: !GetAtt EbsScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+
+  AllowEventBridgeToInvokeEbsScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EbsScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledEbsScanRule.Arn
 
 Outputs:
   EbsScannerFunctionName:
@@ -100,3 +188,9 @@ Outputs:
   ScanRunsTableName:
     Description: DynamoDB table that stores scan execution records.
     Value: !Ref ScanRunsTable
+  ScanNotificationsTopicArn:
+    Description: SNS topic used for finding notifications.
+    Value: !Ref ScanNotificationsTopic
+  ScheduledScanDeadLetterQueueUrl:
+    Description: SQS queue containing scheduled events that exhausted EventBridge retries.
+    Value: !Ref ScheduledScanDeadLetterQueue

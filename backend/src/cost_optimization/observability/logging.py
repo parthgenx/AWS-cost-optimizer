@@ -46,7 +46,7 @@ class JsonFormatter(logging.Formatter):
         return {
             key: value
             for key, value in record.__dict__.items()
-            if key not in self._reserved_fields and not key.startswith("_")
+            if key not in self._reserved_fields and (not key.startswith("_") or key == "_aws")
         }
 
 

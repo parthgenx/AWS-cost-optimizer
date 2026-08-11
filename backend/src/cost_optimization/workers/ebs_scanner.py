@@ -7,11 +7,14 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Protocol
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from cost_optimization.application.services.detect_unattached_ebs_volumes import (
     DetectUnattachedEbsVolumes,
 )
 from cost_optimization.application.services.run_ebs_detection_scan import RunEbsDetectionScan
 from cost_optimization.config import Settings, get_settings
+from cost_optimization.domain.findings import ScanRun
 from cost_optimization.domain.rules.unattached_ebs_volume import (
     UnattachedEbsVolumeRule,
     UnattachedEbsVolumeRuleConfig,
@@ -20,12 +23,21 @@ from cost_optimization.infrastructure.aws.ec2_volumes import (
     Boto3EbsVolumeDiscovery,
     create_ec2_client,
 )
+from cost_optimization.infrastructure.aws.sns_notifications import (
+    SnsScanSummaryPublisher,
+    create_sns_client,
+)
 from cost_optimization.infrastructure.persistence.dynamodb import (
     DynamoDbFindingRepository,
     DynamoDbScanRunRepository,
     get_dynamodb_table,
 )
 from cost_optimization.observability.logging import configure_logging
+from cost_optimization.observability.metrics import (
+    log_completed_scan_metrics,
+    log_failed_scan_metric,
+    log_notification_failure_metric,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +64,15 @@ def run_scan(
     configure_logging(settings)
     account_id = account_id_from_lambda_arn(context.invoked_function_arn)
     workflow = build_workflow(settings, account_id)
-    completed_scan = workflow.execute(evaluated_at or datetime.now(UTC))
+    try:
+        completed_scan = workflow.execute(evaluated_at or datetime.now(UTC))
+    except Exception:
+        log_failed_scan_metric(
+            scanner_name="unattached-ebs-volume", environment=settings.environment
+        )
+        raise
+    log_completed_scan_metrics(completed_scan, environment=settings.environment)
+    publish_findings_notification(completed_scan, settings)
     logger.info(
         "ebs_scan_completed",
         extra={
@@ -67,6 +87,30 @@ def run_scan(
         "evaluated_resource_count": completed_scan.evaluated_resource_count,
         "finding_count": completed_scan.finding_count,
     }
+
+
+def publish_findings_notification(completed_scan: ScanRun, settings: Settings) -> None:
+    """Notify operators only when a successful scan identifies actionable findings."""
+    if not completed_scan.finding_count or not settings.scan_notifications_topic_arn:
+        return
+    if not settings.aws_region:
+        raise RuntimeError("AWS_REGION is required when scan notifications are enabled")
+
+    publisher = SnsScanSummaryPublisher(
+        create_sns_client(settings.aws_region), settings.scan_notifications_topic_arn
+    )
+    try:
+        publisher.publish(completed_scan, environment=settings.environment)
+    except (BotoCoreError, ClientError):
+        logger.exception(
+            "scan_notification_publish_failed",
+            extra={"scan_id": completed_scan.scan_id, "scanner_name": completed_scan.scanner_name},
+        )
+        log_notification_failure_metric(
+            scanner_name=completed_scan.scanner_name,
+            environment=settings.environment,
+            scan_id=completed_scan.scan_id,
+        )
 
 
 def build_workflow(settings: Settings, account_id: str) -> RunEbsDetectionScan:

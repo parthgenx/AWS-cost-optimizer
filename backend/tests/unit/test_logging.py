@@ -12,7 +12,13 @@ def test_json_formatter_includes_context_and_extra_fields() -> None:
     settings = Settings(environment=Environment.TESTING)
     formatter = JsonFormatter(service_name=settings.service_name, environment=settings.environment)
     record = logging.makeLogRecord(
-        {"name": "test", "levelno": logging.INFO, "msg": "scan completed", "scan_id": "scan-123"}
+        {
+            "name": "test",
+            "levelno": logging.INFO,
+            "msg": "scan completed",
+            "scan_id": "scan-123",
+            "_aws": {"CloudWatchMetrics": []},
+        }
     )
     token = set_correlation_id("request-123")
     try:
@@ -24,3 +30,4 @@ def test_json_formatter_includes_context_and_extra_fields() -> None:
     assert payload["scan_id"] == "scan-123"
     assert payload["correlation_id"] == "request-123"
     assert payload["environment"] == "testing"
+    assert payload["_aws"] == {"CloudWatchMetrics": []}

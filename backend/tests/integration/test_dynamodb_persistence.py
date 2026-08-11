@@ -4,15 +4,24 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from cost_optimization.domain.findings import ScanRun, finding_id_for
+from cost_optimization.domain.findings import (
+    AuditEvent,
+    AuditEventType,
+    Finding,
+    ScanRun,
+    finding_id_for,
+)
 from cost_optimization.domain.models import (
     FindingCandidate,
     FindingSeverity,
+    FindingStatus,
     Money,
     ResourceReference,
     ResourceType,
 )
 from cost_optimization.infrastructure.persistence.dynamodb import (
+    DynamoDbFindingApprovalRepository,
+    DynamoDbFindingLifecycleRepository,
     DynamoDbFindingRepository,
     DynamoDbScanRunRepository,
 )
@@ -69,6 +78,62 @@ def test_scan_run_repository_uses_conditional_state_transitions() -> None:
     assert complete_request["ExpressionAttributeValues"][":finding_count"] == 2
 
 
+def test_approval_repository_commits_finding_and_audit_event_in_one_transaction() -> None:
+    candidate = _candidate()
+    now = datetime(2026, 8, 12, tzinfo=UTC)
+    approved_finding = Finding.from_candidate(candidate, now).approve(
+        approved_by="operator-123", approved_at=now
+    )
+    audit_event = AuditEvent.finding_approved(approved_finding)
+    client = FakeDynamoDbClient()
+
+    DynamoDbFindingApprovalRepository(
+        client,
+        findings_table_name="findings",
+        audit_events_table_name="audit-events",
+    ).approve(approved_finding, audit_event)
+
+    transaction = client.transaction_requests[0]["TransactItems"]
+    finding_update = transaction[0]["Update"]
+    audit_put = transaction[1]["Put"]
+    assert finding_update["TableName"] == "findings"
+    assert finding_update["ConditionExpression"] == "#status = :open"
+    assert finding_update["ExpressionAttributeValues"][":approved"]["S"] == "approved"
+    assert finding_update["ExpressionAttributeValues"][":approved_by"]["S"] == "operator-123"
+    assert audit_put["TableName"] == "audit-events"
+    assert audit_put["Item"]["finding_id"]["S"] == approved_finding.finding_id
+    assert audit_put["Item"]["actor"]["S"] == "operator-123"
+
+
+def test_lifecycle_repository_guards_transition_and_persists_its_audit_event() -> None:
+    now = datetime(2026, 8, 12, tzinfo=UTC)
+    approved_finding = Finding.from_candidate(_candidate(), now).approve(
+        approved_by="operator-123", approved_at=now
+    )
+    in_progress = approved_finding.begin_cleanup()
+    client = FakeDynamoDbClient()
+
+    DynamoDbFindingLifecycleRepository(
+        client,
+        findings_table_name="findings",
+        audit_events_table_name="audit-events",
+    ).transition(
+        finding=in_progress,
+        expected_status=FindingStatus.APPROVED,
+        audit_event=AuditEvent.lifecycle_event(
+            finding=in_progress,
+            event_type=AuditEventType.CLEANUP_STARTED,
+            actor="ebs-cleanup-worker",
+            occurred_at=now,
+        ),
+    )
+
+    update = client.transaction_requests[0]["TransactItems"][0]["Update"]
+    assert update["ConditionExpression"] == "#status = :expected"
+    assert update["ExpressionAttributeValues"][":expected"]["S"] == "approved"
+    assert update["ExpressionAttributeValues"][":target"]["S"] == "cleanup_in_progress"
+
+
 class FakeTable:
     def __init__(self, *, update_response: Mapping[str, object]) -> None:
         self._update_response = update_response
@@ -82,6 +147,19 @@ class FakeTable:
     def update_item(self, **kwargs: object) -> Mapping[str, object]:
         self.update_requests.append(kwargs)
         return self._update_response
+
+    def get_item(self, **kwargs: object) -> Mapping[str, object]:
+        del kwargs
+        return {}
+
+
+class FakeDynamoDbClient:
+    def __init__(self) -> None:
+        self.transaction_requests: list[dict[str, object]] = []
+
+    def transact_write_items(self, **kwargs: object) -> Mapping[str, object]:
+        self.transaction_requests.append(kwargs)
+        return {}
 
 
 def _candidate() -> FindingCandidate:

@@ -64,6 +64,30 @@ class Finding(BaseModel):
             }
         )
 
+    def begin_cleanup(self) -> Finding:
+        """Reserve an approved finding for exactly one cleanup execution."""
+        if self.status is not FindingStatus.APPROVED:
+            raise ValueError("Only approved findings can begin cleanup")
+        return self.model_copy(update={"status": FindingStatus.CLEANUP_IN_PROGRESS})
+
+    def complete_cleanup(self) -> Finding:
+        """Mark a finding cleaned after its resource deletion succeeds."""
+        if self.status is not FindingStatus.CLEANUP_IN_PROGRESS:
+            raise ValueError("Only in-progress findings can be marked cleaned")
+        return self.model_copy(update={"status": FindingStatus.CLEANED})
+
+    def resolve_externally(self) -> Finding:
+        """Mark a finding resolved when live revalidation no longer qualifies it."""
+        if self.status is not FindingStatus.CLEANUP_IN_PROGRESS:
+            raise ValueError("Only in-progress findings can be resolved externally")
+        return self.model_copy(update={"status": FindingStatus.RESOLVED_EXTERNALLY})
+
+    def fail_cleanup(self) -> Finding:
+        """Mark a finding failed when cleanup cannot complete safely."""
+        if self.status is not FindingStatus.CLEANUP_IN_PROGRESS:
+            raise ValueError("Only in-progress findings can fail cleanup")
+        return self.model_copy(update={"status": FindingStatus.CLEANUP_FAILED})
+
 
 class FindingApproval(BaseModel):
     """Immutable approval metadata needed before a cleanup workflow may start."""
@@ -84,6 +108,11 @@ class AuditEventType(StrEnum):
     """Business events recorded for security-sensitive finding lifecycle changes."""
 
     FINDING_APPROVED = "finding_approved"
+    CLEANUP_STARTED = "cleanup_started"
+    CLEANUP_DRY_RUN_COMPLETED = "cleanup_dry_run_completed"
+    CLEANUP_COMPLETED = "cleanup_completed"
+    CLEANUP_SKIPPED = "cleanup_skipped"
+    CLEANUP_FAILED = "cleanup_failed"
 
 
 class AuditEvent(BaseModel):
@@ -108,6 +137,26 @@ class AuditEvent(BaseModel):
             actor=finding.approval.approved_by,
             occurred_at=finding.approval.approved_at,
             details={"rule_id": finding.rule_id, "resource_id": finding.resource.resource_id},
+        )
+
+    @classmethod
+    def lifecycle_event(
+        cls,
+        *,
+        finding: Finding,
+        event_type: AuditEventType,
+        actor: str,
+        occurred_at: datetime,
+        details: dict[str, str] | None = None,
+    ) -> AuditEvent:
+        """Create a generic, append-only record for a cleanup lifecycle action."""
+        return cls(
+            event_id=str(uuid4()),
+            finding_id=finding.finding_id,
+            event_type=event_type,
+            actor=actor,
+            occurred_at=occurred_at,
+            details=details or {},
         )
 
     @field_validator("occurred_at")

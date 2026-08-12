@@ -24,6 +24,7 @@ from cost_optimization.infrastructure.persistence.dynamodb import (
     get_dynamodb_table,
 )
 from cost_optimization.observability.logging import configure_logging
+from cost_optimization.workers.lambda_identity import account_id_from_lambda_arn
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +98,3 @@ def _finding_id_from_event(event: Mapping[str, object]) -> str:
     if not isinstance(finding_id, str) or not finding_id:
         raise ValueError("cleanup event must contain a non-empty finding_id")
     return finding_id
-
-
-def account_id_from_lambda_arn(invoked_function_arn: str) -> str:
-    """Extract the account without granting the cleanup role an extra STS permission."""
-    arn_parts = invoked_function_arn.split(":")
-    if len(arn_parts) < 7 or arn_parts[2] != "lambda" or not arn_parts[4].isdigit():
-        raise ValueError("invoked_function_arn must be a valid Lambda ARN")
-    account_id = arn_parts[4]
-    if len(account_id) != 12:
-        raise ValueError("Lambda ARN must contain a 12-digit AWS account ID")
-    return account_id

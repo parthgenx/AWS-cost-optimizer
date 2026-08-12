@@ -26,8 +26,8 @@ Every destructive action will require explicit approval and a final live AWS-sta
 | Area | Capability | Status |
 |---|---|---|
 | Detection | Unattached EBS volumes | Implemented |
-| Detection | Unassociated Elastic IPs | Planned |
-| Detection | Old EBS snapshots | Planned |
+| Detection | Unassociated Elastic IPs | Implemented |
+| Detection | Old manual EBS snapshots | Implemented (review-only) |
 | Optimization | Idle EC2 instances using CloudWatch evidence | Planned |
 | Optimization | Idle RDS instances using CloudWatch evidence | Planned |
 | Optimization | Idle load balancers using CloudWatch evidence | Planned |
@@ -38,6 +38,8 @@ Every destructive action will require explicit approval and a final live AWS-sta
 | Operations | Scheduled EBS scans, SNS finding notifications, retry/DLQ, and CloudWatch metrics | Implemented |
 
 EC2, RDS, and load-balancer findings will be recommendations—not automatic cleanup candidates. Low activity does not prove that a production workload is safe to remove.
+
+Elastic IP and snapshot detection are also read-only. Only unattached EBS volumes currently have an approval-gated cleanup path.
 
 ## Target architecture
 
@@ -98,6 +100,28 @@ AWS does not expose the timestamp when an EBS volume became detached. The curren
 > “Currently unattached and old enough”
 
 It does not claim that a volume has been unattached for the complete age threshold.
+
+## Implemented: Elastic IP and EBS snapshot detection
+
+### Unassociated Elastic IPs
+
+The Elastic IP scanner calls boto3's paginated EC2 `describe_addresses` API and
+flags an address only when AWS returns no association, network interface, or
+instance identifier. The default reference estimate is `$3.60/month` per
+address. This is an explicit estimate, not a billing quote; regional pricing
+and IPv4 billing policies can change.
+
+### Old manual EBS snapshots
+
+The snapshot scanner uses paginated EC2 `describe_snapshots` calls scoped to
+`OwnerIds=["self"]` and completed snapshots. It flags completed snapshots older
+than 90 days unless excluded or identified as AMI-created from the documented
+`Created by CreateImage(` description convention. These are **retention review
+findings**, not a claim that a snapshot is unused.
+
+No per-snapshot savings estimate is shown. EBS snapshot charges are based on
+incremental stored blocks rather than a snapshot's source volume size, so
+estimating cost from `VolumeSize` would be misleading.
 
 ## Finding persistence
 

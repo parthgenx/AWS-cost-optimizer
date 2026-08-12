@@ -2,10 +2,10 @@
 
 ## What this milestone deploys
 
-The SAM template creates two on-demand DynamoDB tables, an EBS scanner Lambda,
-an SNS notification topic, an EventBridge schedule rule, and an SQS
-dead-letter queue. It does not expose an API endpoint or permit any delete
-operation.
+The SAM template creates three on-demand DynamoDB tables, separate read-only
+scanner Lambdas for EBS volumes, Elastic IPs, and EBS snapshots, an isolated
+EBS cleanup Lambda, an SNS notification topic, EventBridge rules, and encrypted
+SQS dead-letter queues. It does not expose an API endpoint.
 
 ## Why AWS SAM
 
@@ -15,12 +15,12 @@ without adding an infrastructure framework that would obscure the project.
 
 ## Lambda flow
 
-1. A caller manually invokes the EBS scanner Lambda, or EventBridge invokes it
-   when scheduled scans are enabled.
+1. A caller manually invokes one resource-specific scanner Lambda, or
+   EventBridge invokes the EBS scanner when scheduled scans are enabled.
 2. The handler gets region and table names from environment variables.
 3. It extracts the AWS account ID from Lambda's invocation ARN, avoiding an
    extra STS API permission.
-4. It wires the existing boto3 EBS adapter, pure rule, and DynamoDB repositories.
+4. It wires a boto3 resource adapter, pure rule, and DynamoDB repositories.
 5. It emits scan metrics through structured CloudWatch logs.
 6. If findings exist, it publishes a compact summary to SNS.
 7. It returns a small scan summary and writes structured logs to CloudWatch.
@@ -53,12 +53,16 @@ completed successfully.
 
 ## IAM boundary
 
-The scanner role may only call `ec2:DescribeVolumes`, update the Findings table,
-and create/update ScanRuns records. EC2 `DescribeVolumes` cannot be scoped to a
-specific resource ARN, so it necessarily uses `Resource: "*"`.
+Each scanner has a distinct, read-only EC2 permission: `ec2:DescribeVolumes`,
+`ec2:DescribeAddresses`, or `ec2:DescribeSnapshots`. Each may update the
+Findings table, create/update ScanRuns records, and publish summary
+notifications. These EC2 describe actions cannot be scoped to a specific
+resource ARN, so they necessarily use `Resource: "*"`.
 
-No permissions to delete EBS volumes, release IPs, alter RDS, or modify load
-balancers are granted.
+Only the isolated EBS cleanup Lambda has `ec2:DeleteVolume`, scoped to EBS
+volume ARNs in the deployed account and region. It is dry-run by default and
+requires explicit deployment configuration before it can delete. No Lambda has
+permission to release IPs, alter RDS, or modify load balancers.
 
 ## Environment naming
 

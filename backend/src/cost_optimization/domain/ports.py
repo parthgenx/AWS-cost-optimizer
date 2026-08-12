@@ -6,7 +6,13 @@ from datetime import datetime
 from typing import Protocol
 
 from cost_optimization.domain.findings import AuditEvent, Finding, ScanRun
-from cost_optimization.domain.models import EbsVolume, FindingCandidate, FindingStatus
+from cost_optimization.domain.models import (
+    EbsSnapshot,
+    EbsVolume,
+    ElasticIpAddress,
+    FindingCandidate,
+    FindingStatus,
+)
 
 
 class EbsVolumeDiscovery(Protocol):
@@ -14,6 +20,20 @@ class EbsVolumeDiscovery(Protocol):
 
     def list_unattached_volumes(self) -> list[EbsVolume]:
         """Return only currently unattached EBS volumes."""
+
+
+class ElasticIpDiscovery(Protocol):
+    """Retrieves Elastic IP addresses that could be evaluated by detection rules."""
+
+    def list_addresses(self) -> list[ElasticIpAddress]:
+        """Return Elastic IP addresses visible to the configured account and region."""
+
+
+class EbsSnapshotDiscovery(Protocol):
+    """Retrieves account-owned EBS snapshots that could be evaluated by detection rules."""
+
+    def list_owned_snapshots(self) -> list[EbsSnapshot]:
+        """Return EBS snapshots owned by the configured AWS account."""
 
 
 class FindingRepository(Protocol):

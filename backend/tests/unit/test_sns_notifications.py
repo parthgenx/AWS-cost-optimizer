@@ -9,7 +9,7 @@ from botocore.exceptions import ClientError
 from cost_optimization.config import Environment, Settings
 from cost_optimization.domain.findings import ScanRun
 from cost_optimization.infrastructure.aws.sns_notifications import SnsScanSummaryPublisher
-from cost_optimization.workers import ebs_scanner
+from cost_optimization.workers import scan_notifications
 
 
 def test_sns_scan_summary_publisher_formats_completed_scan() -> None:
@@ -43,12 +43,12 @@ def test_sns_scan_summary_publisher_rejects_incomplete_scan() -> None:
 
 def test_worker_skips_sns_for_scan_without_findings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        ebs_scanner,
+        scan_notifications,
         "create_sns_client",
         lambda _: pytest.fail("SNS client must not be created for zero findings"),
     )
 
-    ebs_scanner.publish_findings_notification(
+    scan_notifications.publish_findings_notification(
         _completed_scan(finding_count=0), _notification_settings()
     )
 
@@ -57,9 +57,9 @@ def test_worker_logs_sns_publish_failure_without_rerunning_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = FailingSnsClient()
-    monkeypatch.setattr(ebs_scanner, "create_sns_client", lambda _: client)
+    monkeypatch.setattr(scan_notifications, "create_sns_client", lambda _: client)
 
-    ebs_scanner.publish_findings_notification(
+    scan_notifications.publish_findings_notification(
         _completed_scan(finding_count=1), _notification_settings()
     )
 

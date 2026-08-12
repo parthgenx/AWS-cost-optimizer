@@ -30,6 +30,16 @@ class EbsVolumeState(StrEnum):
     ERROR = "error"
 
 
+class EbsSnapshotState(StrEnum):
+    """Relevant snapshot states returned by the EC2 API."""
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    ERROR = "error"
+    RECOVERABLE = "recoverable"
+    RECOVERING = "recovering"
+
+
 class FindingStatus(StrEnum):
     """Lifecycle states for a potentially wasteful resource."""
 
@@ -89,6 +99,47 @@ class EbsVolume(BaseModel):
         """Prevent accidentally evaluating another AWS resource as an EBS volume."""
         if value.resource_type is not ResourceType.EBS_VOLUME:
             raise ValueError("EbsVolume.resource.resource_type must be ebs_volume")
+        return value
+
+
+class ElasticIpAddress(BaseModel):
+    """Provider-neutral Elastic IP fields needed by the unassociated-address rule."""
+
+    resource: ResourceReference
+    public_ip: str = Field(min_length=1, max_length=64)
+    allocation_id: str = Field(min_length=1, max_length=128)
+    association_id: str | None = None
+    network_interface_id: str | None = None
+    instance_id: str | None = None
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_elastic_ip_resource(cls, value: ResourceReference) -> ResourceReference:
+        """Prevent evaluating a non-address resource with this rule."""
+        if value.resource_type is not ResourceType.ELASTIC_IP:
+            raise ValueError("ElasticIpAddress.resource.resource_type must be elastic_ip")
+        return value
+
+
+class EbsSnapshot(BaseModel):
+    """Provider-neutral EBS snapshot fields required for conservative review findings."""
+
+    resource: ResourceReference
+    state: EbsSnapshotState
+    started_at: datetime
+    volume_id: str = Field(min_length=1, max_length=128)
+    volume_size_gib: int = Field(gt=0)
+    description: str = Field(default="", max_length=1024)
+    storage_tier: str = Field(default="standard", min_length=1, max_length=32)
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_ebs_snapshot_resource(cls, value: ResourceReference) -> ResourceReference:
+        """Prevent evaluating a non-snapshot resource with this rule."""
+        if value.resource_type is not ResourceType.EBS_SNAPSHOT:
+            raise ValueError("EbsSnapshot.resource.resource_type must be ebs_snapshot")
         return value
 
 

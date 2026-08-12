@@ -7,8 +7,10 @@
    retries, and DLQ.
 4. **Approval and safe cleanup:** state transitions, audit trail, revalidation,
    EventBridge cleanup event, and dry-run mode.
-5. **Additional resources:** Elastic IP and EBS snapshot detection completed;
-   next, carefully scoped EC2 detection.
+5. **Additional resources and recommendations:** Elastic IP and EBS snapshot
+   detection, plus conservative CloudWatch-backed EC2, RDS, and Application
+   Load Balancer recommendations, completed. These recommendations are
+   deliberately read-only.
 6. **Production hardening:** Cognito authorization, alarms, OIDC deployment,
    runbooks, and sandbox end-to-end testing.
 

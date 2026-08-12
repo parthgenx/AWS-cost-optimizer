@@ -17,6 +17,8 @@ class ResourceType(StrEnum):
     EBS_VOLUME = "ebs_volume"
     ELASTIC_IP = "elastic_ip"
     EBS_SNAPSHOT = "ebs_snapshot"
+    RDS_INSTANCE = "rds_instance"
+    APPLICATION_LOAD_BALANCER = "application_load_balancer"
 
 
 class EbsVolumeState(StrEnum):
@@ -140,6 +142,122 @@ class EbsSnapshot(BaseModel):
         """Prevent evaluating a non-snapshot resource with this rule."""
         if value.resource_type is not ResourceType.EBS_SNAPSHOT:
             raise ValueError("EbsSnapshot.resource.resource_type must be ebs_snapshot")
+        return value
+
+
+class Ec2Instance(BaseModel):
+    """Provider-neutral EC2 fields needed for utilization recommendations."""
+
+    resource: ResourceReference
+    instance_type: str = Field(min_length=1, max_length=64)
+    launched_at: datetime
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_ec2_instance_resource(cls, value: ResourceReference) -> ResourceReference:
+        """Prevent evaluating another resource type with the EC2 recommendation rule."""
+        if value.resource_type is not ResourceType.EC2_INSTANCE:
+            raise ValueError("Ec2Instance.resource.resource_type must be ec2_instance")
+        return value
+
+
+class RdsInstance(BaseModel):
+    """Provider-neutral RDS fields used for conservative utilization recommendations."""
+
+    resource: ResourceReference
+    instance_class: str = Field(min_length=1, max_length=64)
+    engine: str = Field(min_length=1, max_length=64)
+    created_at: datetime
+    multi_az: bool
+    db_cluster_identifier: str | None = None
+    read_replica_source_identifier: str | None = None
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_rds_instance_resource(cls, value: ResourceReference) -> ResourceReference:
+        """Prevent evaluating another resource type with the RDS recommendation rule."""
+        if value.resource_type is not ResourceType.RDS_INSTANCE:
+            raise ValueError("RdsInstance.resource.resource_type must be rds_instance")
+        return value
+
+
+class ApplicationLoadBalancer(BaseModel):
+    """Provider-neutral ALB fields used for request-volume recommendations."""
+
+    resource: ResourceReference
+    name: str = Field(min_length=1, max_length=128)
+    cloudwatch_dimension_value: str = Field(min_length=1, max_length=512)
+    scheme: str = Field(min_length=1, max_length=32)
+    created_at: datetime
+    tags: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("resource")
+    @classmethod
+    def require_application_load_balancer_resource(
+        cls, value: ResourceReference
+    ) -> ResourceReference:
+        """Prevent evaluating another resource type with the ALB recommendation rule."""
+        if value.resource_type is not ResourceType.APPLICATION_LOAD_BALANCER:
+            raise ValueError(
+                "ApplicationLoadBalancer.resource.resource_type must be application_load_balancer"
+            )
+        return value
+
+
+class MetricWindow(BaseModel):
+    """A complete CloudWatch metric observation window, free of AWS SDK structures."""
+
+    metric_name: str = Field(min_length=1, max_length=128)
+    statistic: MetricStatistic
+    sample_count: int = Field(ge=0)
+    expected_sample_count: int = Field(gt=0)
+    value: Decimal | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        """Require every expected daily observation before drawing a utilization conclusion."""
+        return self.sample_count >= self.expected_sample_count
+
+    @property
+    def has_values(self) -> bool:
+        """Return whether CloudWatch returned one or more usable values for the metric."""
+        return self.value is not None
+
+
+class MetricStatistic(StrEnum):
+    """CloudWatch aggregate statistic required by a metric observation query."""
+
+    MAXIMUM = "Maximum"
+    SUM = "Sum"
+
+
+class MetricQuery(BaseModel):
+    """Provider-neutral description of a daily CloudWatch metric observation query."""
+
+    namespace: str = Field(min_length=1, max_length=256)
+    metric_name: str = Field(min_length=1, max_length=128)
+    statistic: MetricStatistic
+    dimensions: Mapping[str, str] = Field(min_length=1)
+    start_at: datetime
+    end_at: datetime
+    expected_sample_count: int = Field(gt=0, le=3660)
+
+    @field_validator("end_at")
+    @classmethod
+    def require_timezone_aware_end(cls, value: datetime) -> datetime:
+        """Avoid ambiguous CloudWatch request boundaries."""
+        if value.tzinfo is None:
+            raise ValueError("end_at must be timezone-aware")
+        return value
+
+    @field_validator("start_at")
+    @classmethod
+    def require_timezone_aware_start(cls, value: datetime) -> datetime:
+        """Avoid ambiguous CloudWatch request boundaries."""
+        if value.tzinfo is None:
+            raise ValueError("start_at must be timezone-aware")
         return value
 
 

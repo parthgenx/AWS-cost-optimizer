@@ -17,11 +17,11 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-    Description: Enable the EventBridge schedule for automatic EBS scans.
+    Description: Enable the EventBridge schedule for automatic read-only scans.
   ScanScheduleExpression:
     Type: String
     Default: "cron(0 3 ? * SUN *)"
-    Description: EventBridge schedule expression for automatic EBS scans (UTC).
+    Description: EventBridge schedule expression for automatic read-only scans (UTC).
   NotificationEmail:
     Type: String
     Default: ""
@@ -40,6 +40,29 @@ Parameters:
       - "true"
       - "false"
     Description: Explicitly allow the isolated cleanup Lambda to delete revalidated EBS volumes.
+  UtilizationLookbackDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    MaxValue: 90
+    Description: Number of complete UTC days required for utilization recommendations.
+  Ec2MaximumCpuPercent:
+    Type: Number
+    Default: 5
+    MinValue: 0
+    MaxValue: 100
+    Description: Maximum daily EC2 CPU utilization allowed by the recommendation rule.
+  Ec2MaximumTotalNetworkBytes:
+    Type: Number
+    Default: 1073741824
+    MinValue: 0
+    Description: Maximum total EC2 NetworkIn plus NetworkOut bytes across the lookback window.
+  RdsMaximumCpuPercent:
+    Type: Number
+    Default: 5
+    MinValue: 0
+    MaxValue: 100
+    Description: Maximum daily RDS CPU utilization allowed by the recommendation rule.
 
 Conditions:
   ScheduledScansEnabledCondition: !Equals [!Ref ScheduledScansEnabled, "true"]
@@ -251,6 +274,182 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${EbsSnapshotScannerFunction}"
       RetentionInDays: 30
 
+  Ec2UtilizationScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-ec2-utilization-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.ec2_utilization_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 1024
+      Timeout: 120
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: ec2-utilization-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+          COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS: !Ref UtilizationLookbackDays
+          COST_OPTIMIZER_EC2_MAXIMUM_CPU_PERCENT: !Ref Ec2MaximumCpuPercent
+          COST_OPTIMIZER_EC2_MAXIMUM_TOTAL_NETWORK_BYTES: !Ref Ec2MaximumTotalNetworkBytes
+      Policies:
+        - Statement:
+            - Sid: DescribeRunningEc2Instances
+              Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+              Resource: "*"
+            - Sid: ReadEc2UtilizationMetrics
+              Effect: Allow
+              Action:
+                - cloudwatch:GetMetricData
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
+
+  Ec2UtilizationScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Ec2UtilizationScannerFunction}"
+      RetentionInDays: 30
+
+  RdsUtilizationScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-rds-utilization-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.rds_utilization_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 1024
+      Timeout: 120
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: rds-utilization-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+          COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS: !Ref UtilizationLookbackDays
+          COST_OPTIMIZER_RDS_MAXIMUM_CPU_PERCENT: !Ref RdsMaximumCpuPercent
+      Policies:
+        - Statement:
+            - Sid: DescribeAvailableRdsInstances
+              Effect: Allow
+              Action:
+                - rds:DescribeDBInstances
+                - rds:ListTagsForResource
+              Resource: "*"
+            - Sid: ReadRdsUtilizationMetrics
+              Effect: Allow
+              Action:
+                - cloudwatch:GetMetricData
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
+
+  RdsUtilizationScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${RdsUtilizationScannerFunction}"
+      RetentionInDays: 30
+
+  ApplicationLoadBalancerScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-alb-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.application_load_balancer_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 1024
+      Timeout: 120
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: application-load-balancer-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+          COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS: !Ref UtilizationLookbackDays
+      Policies:
+        - Statement:
+            - Sid: DescribeApplicationLoadBalancers
+              Effect: Allow
+              Action:
+                - elasticloadbalancing:DescribeLoadBalancers
+                - elasticloadbalancing:DescribeTags
+              Resource: "*"
+            - Sid: ReadApplicationLoadBalancerMetrics
+              Effect: Allow
+              Action:
+                - cloudwatch:GetMetricData
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
+
+  ApplicationLoadBalancerScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApplicationLoadBalancerScannerFunction}"
+      RetentionInDays: 30
+
   EbsCleanupFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -386,7 +585,7 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: AllowEventBridgeToWriteFailedScheduledScans
+          - Sid: AllowInventoryScheduleToWriteFailedScans
             Effect: Allow
             Principal:
               Service: events.amazonaws.com
@@ -395,17 +594,74 @@ Resources:
             Condition:
               ArnEquals:
                 aws:SourceArn: !GetAtt ScheduledEbsScanRule.Arn
+          - Sid: AllowUtilizationScheduleToWriteFailedScans
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ScheduledScanDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
 
   ScheduledEbsScanRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "aws-cost-optimizer-ebs-scan-${Environment}"
-      Description: !Sub "Runs the EBS cost-optimization scan for ${Environment}."
+      Name: !Sub "aws-cost-optimizer-inventory-scan-${Environment}"
+      Description: !Sub "Runs read-only inventory cost-optimization scans for ${Environment}."
       ScheduleExpression: !Ref ScanScheduleExpression
       State: !If [ScheduledScansEnabledCondition, ENABLED, DISABLED]
       Targets:
         - Id: EbsScanner
           Arn: !GetAtt EbsScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+        - Id: ElasticIpScanner
+          Arn: !GetAtt ElasticIpScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+        - Id: EbsSnapshotScanner
+          Arn: !GetAtt EbsSnapshotScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+  ScheduledUtilizationScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aws-cost-optimizer-utilization-scan-${Environment}"
+      Description: !Sub "Runs read-only utilization recommendation scans for ${Environment}."
+      ScheduleExpression: !Ref ScanScheduleExpression
+      State: !If [ScheduledScansEnabledCondition, ENABLED, DISABLED]
+      Targets:
+        - Id: Ec2UtilizationScanner
+          Arn: !GetAtt Ec2UtilizationScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+        - Id: RdsUtilizationScanner
+          Arn: !GetAtt RdsUtilizationScannerFunction.Arn
+          Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt ScheduledScanDeadLetterQueue.Arn
+        - Id: ApplicationLoadBalancerScanner
+          Arn: !GetAtt ApplicationLoadBalancerScannerFunction.Arn
           Input: !Sub '{"trigger":"scheduled","environment":"${Environment}"}'
           RetryPolicy:
             MaximumEventAgeInSeconds: 3600
@@ -421,6 +677,46 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ScheduledEbsScanRule.Arn
 
+  AllowEventBridgeToInvokeElasticIpScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ElasticIpScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledEbsScanRule.Arn
+
+  AllowEventBridgeToInvokeEbsSnapshotScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EbsSnapshotScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledEbsScanRule.Arn
+
+  AllowEventBridgeToInvokeEc2UtilizationScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref Ec2UtilizationScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
+
+  AllowEventBridgeToInvokeRdsUtilizationScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RdsUtilizationScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
+
+  AllowEventBridgeToInvokeApplicationLoadBalancerScanner:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApplicationLoadBalancerScannerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
+
 Outputs:
   EbsScannerFunctionName:
     Description: Lambda function name for manual scan invocation.
@@ -431,6 +727,15 @@ Outputs:
   EbsSnapshotScannerFunctionName:
     Description: Lambda function name for manual EBS snapshot scan invocation.
     Value: !Ref EbsSnapshotScannerFunction
+  Ec2UtilizationScannerFunctionName:
+    Description: Lambda function name for manual EC2 utilization scan invocation.
+    Value: !Ref Ec2UtilizationScannerFunction
+  RdsUtilizationScannerFunctionName:
+    Description: Lambda function name for manual RDS utilization scan invocation.
+    Value: !Ref RdsUtilizationScannerFunction
+  ApplicationLoadBalancerScannerFunctionName:
+    Description: Lambda function name for manual Application Load Balancer traffic scan invocation.
+    Value: !Ref ApplicationLoadBalancerScannerFunction
   EbsCleanupFunctionName:
     Description: Isolated Lambda that dry-runs or cleans one approved EBS finding.
     Value: !Ref EbsCleanupFunction

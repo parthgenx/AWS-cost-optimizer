@@ -9,3 +9,12 @@ build-ElasticIpScannerFunction:
 
 build-EbsSnapshotScannerFunction:
 	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .
+
+build-Ec2UtilizationScannerFunction:
+	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .
+
+build-RdsUtilizationScannerFunction:
+	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .
+
+build-ApplicationLoadBalancerScannerFunction:
+	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .

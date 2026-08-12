@@ -4,10 +4,11 @@
 
 A production-minded AWS cost-optimization platform that identifies avoidable cloud spend, estimates potential monthly savings, and supports safe, approval-gated cleanup workflows.
 
-> Current status: active development. EBS detection, durable finding records,
-> scheduled scans, notifications, approval auditing, EventBridge cleanup
-> requests, and a dry-run-first EBS cleanup worker are implemented. Production
-> API authentication and additional resource rules remain in progress.
+> Current status: active development. Storage and public-IP detection, durable
+> finding records, scheduled scans, notifications, approval auditing, a
+> dry-run-first EBS cleanup worker, and CloudWatch-backed EC2, RDS, and
+> Application Load Balancer recommendations are implemented. Production API
+> authentication and operational hardening remain in progress.
 
 ## Problem
 
@@ -28,16 +29,18 @@ Every destructive action will require explicit approval and a final live AWS-sta
 | Detection | Unattached EBS volumes | Implemented |
 | Detection | Unassociated Elastic IPs | Implemented |
 | Detection | Old manual EBS snapshots | Implemented (review-only) |
-| Optimization | Idle EC2 instances using CloudWatch evidence | Planned |
-| Optimization | Idle RDS instances using CloudWatch evidence | Planned |
-| Optimization | Idle load balancers using CloudWatch evidence | Planned |
+| Optimization | Low-utilization EC2 instances using CloudWatch evidence | Implemented (review-only) |
+| Optimization | Low-utilization standalone RDS instances using CloudWatch evidence | Implemented (review-only) |
+| Optimization | Application Load Balancers with no request evidence | Implemented (review-only) |
 | Costing | Monthly savings estimates | EBS reference-rate estimate implemented |
 | Persistence | Findings and scan-run records | Implemented |
 | Safety | Resource exclusion tags | Implemented |
 | Safety | Approval audit, explicit cleanup request, dry-run, and revalidation | Implemented for EBS |
-| Operations | Scheduled EBS scans, SNS finding notifications, retry/DLQ, and CloudWatch metrics | Implemented |
+| Operations | Scheduled scans, SNS finding notifications, retry/DLQ, and CloudWatch metrics | Implemented |
 
-EC2, RDS, and load-balancer findings will be recommendations—not automatic cleanup candidates. Low activity does not prove that a production workload is safe to remove.
+EC2, RDS, and load-balancer findings are recommendations—not automatic cleanup
+candidates. Low activity does not prove that a production workload is safe to
+remove.
 
 Elastic IP and snapshot detection are also read-only. Only unattached EBS volumes currently have an approval-gated cleanup path.
 
@@ -122,6 +125,57 @@ findings**, not a claim that a snapshot is unused.
 No per-snapshot savings estimate is shown. EBS snapshot charges are based on
 incremental stored blocks rather than a snapshot's source volume size, so
 estimating cost from `VolumeSize` would be misleading.
+
+## Implemented: utilization recommendations
+
+The platform now adds three conservative, CloudWatch-backed rules. Each rule
+uses complete UTC days only and excludes the current, partial day. A finding is
+an investigation prompt, never an instruction to delete a workload.
+
+### EC2: sustained low CPU and network activity
+
+The EC2 scanner considers running instances older than the observation window.
+It requires complete daily data for all three metrics: `CPUUtilization`,
+`NetworkIn`, and `NetworkOut`. With the default 14-day window, it recommends
+review only when every daily CPU maximum is at most 5% and total network traffic
+is at most 1 GiB. An exclusion tag always wins.
+
+### RDS: low utilization with no client connections
+
+The RDS scanner considers only available, standalone instances that are older
+than the observation window. It requires complete daily `CPUUtilization` and
+`DatabaseConnections` data. By default, CPU must remain at or below 5% and the
+maximum reported client connections must be zero. Multi-AZ, clustered, Aurora,
+and read-replica topologies are deliberately excluded because they have a
+higher risk of being a dependency or resilience component.
+
+`DatabaseConnections` is only one signal: AWS defines it as client network
+connections and excludes internal database connections. It therefore supports
+human review rather than proving that a database is unused. [AWS RDS metrics](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-metrics.html)
+
+### Application Load Balancers: no request evidence
+
+The load-balancer scanner considers active Application Load Balancers older
+than the observation window. It looks for no `RequestCount` metric data over
+that entire period. AWS emits ALB metrics only when requests flow, and health
+checks are excluded from this metric, so this is a useful but intentionally
+non-destructive review signal. [AWS ALB metrics](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html)
+
+### Why no savings estimate yet?
+
+The initial utilization rules intentionally do not estimate savings. Accurate
+EC2, RDS, and load-balancer pricing depends on region, instance class, purchase
+model, storage, data transfer, and other configuration. Showing a simplistic
+number would make the finding look more certain than it is. A later pricing
+integration can add estimates with an explicit methodology.
+
+### Efficient CloudWatch access
+
+Each scanner discovers resources with boto3, then requests daily CloudWatch
+metrics in batches of up to 500 metric queries. This avoids one CloudWatch call
+per resource per metric, while keeping CloudWatch and boto3 code outside the
+business rules. The rule engine receives typed metric windows, so it remains
+unit-testable without AWS credentials.
 
 ## Finding persistence
 
@@ -264,9 +318,9 @@ SAM_CLI_TELEMETRY=0 sam build \
 ```
 
 Deploy the built package. The command creates the `aws-cost-optimizer-dev`
-CloudFormation stack, including scanner and cleanup Lambdas, DynamoDB tables,
-EventBridge rules, and CloudWatch log groups. Cleanup remains dry-run-only by
-default.
+CloudFormation stack, including six scanner Lambdas, an isolated cleanup Lambda,
+DynamoDB tables, EventBridge rules, and CloudWatch log groups. Cleanup remains
+dry-run-only by default.
 
 ```bash
 SAM_CLI_TELEMETRY=0 sam deploy \
@@ -284,7 +338,7 @@ bucket is not an application runtime service. SAM removes this application's
 artifacts during cleanup; an empty shared bucket does not incur S3 storage
 charges.
 
-Scheduled scans are disabled by default. To enable the weekly EventBridge scan
+Scheduled scans are disabled by default. To enable the weekly EventBridge scans
 and subscribe an email recipient to finding notifications, add these parameter
 overrides to the deployment command:
 
@@ -305,7 +359,7 @@ EventBridge expression contains spaces:
   'Environment=dev ScheduledScansEnabled=true ScanScheduleExpression="rate(1 hour)"'
 ```
 
-### Verify one EBS scan
+### Verify one scan
 
 Invoke the scanner once, then read the Lambda response:
 
@@ -377,6 +431,10 @@ CloudFormation recreates a fresh development environment from
 | `COST_OPTIMIZER_LOG_LEVEL` | `INFO` | Structured logging threshold |
 | `COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS` | `14` | Minimum EBS volume age |
 | `COST_OPTIMIZER_EBS_REFERENCE_GIB_MONTHLY_RATE_USD` | `0.08` | Reference EBS savings rate |
+| `COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS` | `14` | Complete UTC days required for utilization recommendations |
+| `COST_OPTIMIZER_EC2_MAXIMUM_CPU_PERCENT` | `5` | Maximum daily EC2 CPU percentage |
+| `COST_OPTIMIZER_EC2_MAXIMUM_TOTAL_NETWORK_BYTES` | `1073741824` | Maximum combined EC2 network bytes across the window |
+| `COST_OPTIMIZER_RDS_MAXIMUM_CPU_PERCENT` | `5` | Maximum daily RDS CPU percentage |
 
 ## Security and safety principles
 
@@ -394,7 +452,7 @@ CloudFormation recreates a fresh development environment from
 2. Add EventBridge schedules, SNS notifications, CloudWatch metrics, retries, and dead-letter handling.
 3. Add approval, audit, dry-run, and safe cleanup workflows.
 4. Add Elastic IP and EBS snapshot detection.
-5. Add CloudWatch-backed EC2, RDS, and load-balancer recommendations.
+5. Add CloudWatch-backed EC2, RDS, and load-balancer recommendations. ✅
 6. Add Cognito authorization, monitoring dashboards, runbooks, and sandbox end-to-end tests.
 
 ## Documentation
@@ -403,6 +461,7 @@ CloudFormation recreates a fresh development environment from
 - [Milestone plan](docs/milestones.md)
 - [Layered backend decision record](docs/decisions/0001-layered-backend.md)
 - [Unattached EBS volume rule](docs/rules/unattached-ebs-volumes.md)
+- [Utilization recommendation rules](docs/rules/utilization-recommendations.md)
 - [Deployment foundation](docs/deployment.md)
 
 ## Development workflow

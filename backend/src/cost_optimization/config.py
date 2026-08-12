@@ -37,6 +37,14 @@ class Settings(BaseModel):
     ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
     elastic_ip_reference_monthly_rate_usd: Decimal = Field(default=Decimal("3.60"), gt=Decimal("0"))
     ebs_snapshot_minimum_age_days: int = Field(default=90, ge=1, le=3650)
+    utilization_lookback_days: int = Field(default=14, ge=1, le=90)
+    ec2_maximum_cpu_percent: Decimal = Field(
+        default=Decimal("5"), ge=Decimal("0"), le=Decimal("100")
+    )
+    ec2_maximum_total_network_bytes: Decimal = Field(default=Decimal("1073741824"), ge=Decimal("0"))
+    rds_maximum_cpu_percent: Decimal = Field(
+        default=Decimal("5"), ge=Decimal("0"), le=Decimal("100")
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -89,6 +97,14 @@ class Settings(BaseModel):
                 "ebs_snapshot_minimum_age_days": os.getenv(
                     "COST_OPTIMIZER_EBS_SNAPSHOT_MINIMUM_AGE_DAYS", "90"
                 ),
+                "utilization_lookback_days": os.getenv(
+                    "COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS", "14"
+                ),
+                "ec2_maximum_cpu_percent": os.getenv("COST_OPTIMIZER_EC2_MAXIMUM_CPU_PERCENT", "5"),
+                "ec2_maximum_total_network_bytes": os.getenv(
+                    "COST_OPTIMIZER_EC2_MAXIMUM_TOTAL_NETWORK_BYTES", "1073741824"
+                ),
+                "rds_maximum_cpu_percent": os.getenv("COST_OPTIMIZER_RDS_MAXIMUM_CPU_PERCENT", "5"),
             }
         )
 

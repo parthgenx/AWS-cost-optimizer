@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
 from cost_optimization.domain.findings import AuditEvent, Finding, ScanRun
 from cost_optimization.domain.models import (
+    ApplicationLoadBalancer,
     EbsSnapshot,
     EbsVolume,
+    Ec2Instance,
     ElasticIpAddress,
     FindingCandidate,
     FindingStatus,
+    MetricQuery,
+    MetricWindow,
+    RdsInstance,
 )
 
 
@@ -34,6 +40,34 @@ class EbsSnapshotDiscovery(Protocol):
 
     def list_owned_snapshots(self) -> list[EbsSnapshot]:
         """Return EBS snapshots owned by the configured AWS account."""
+
+
+class Ec2InstanceDiscovery(Protocol):
+    """Retrieves running EC2 instances eligible for utilization evaluation."""
+
+    def list_running_instances(self) -> list[Ec2Instance]:
+        """Return running instances visible to the configured account and region."""
+
+
+class RdsInstanceDiscovery(Protocol):
+    """Retrieves available RDS instances eligible for utilization evaluation."""
+
+    def list_available_instances(self) -> list[RdsInstance]:
+        """Return available provisioned RDS instances in the configured account and region."""
+
+
+class ApplicationLoadBalancerDiscovery(Protocol):
+    """Retrieves active Application Load Balancers eligible for traffic evaluation."""
+
+    def list_active_load_balancers(self) -> list[ApplicationLoadBalancer]:
+        """Return active Application Load Balancers visible to the configured account and region."""
+
+
+class CloudWatchMetricReader(Protocol):
+    """Reads an aggregate metric window without exposing boto3 response structures."""
+
+    def get_daily_windows(self, queries: Mapping[str, MetricQuery]) -> Mapping[str, MetricWindow]:
+        """Return daily aggregate windows for a batch of metric identifiers."""
 
 
 class FindingRepository(Protocol):

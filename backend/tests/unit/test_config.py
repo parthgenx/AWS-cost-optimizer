@@ -26,6 +26,10 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("COST_OPTIMIZER_EBS_REFERENCE_GIB_MONTHLY_RATE_USD", "0.10")
     monkeypatch.setenv("COST_OPTIMIZER_ELASTIC_IP_REFERENCE_MONTHLY_RATE_USD", "4.00")
     monkeypatch.setenv("COST_OPTIMIZER_EBS_SNAPSHOT_MINIMUM_AGE_DAYS", "120")
+    monkeypatch.setenv("COST_OPTIMIZER_UTILIZATION_LOOKBACK_DAYS", "21")
+    monkeypatch.setenv("COST_OPTIMIZER_EC2_MAXIMUM_CPU_PERCENT", "4")
+    monkeypatch.setenv("COST_OPTIMIZER_EC2_MAXIMUM_TOTAL_NETWORK_BYTES", "2048")
+    monkeypatch.setenv("COST_OPTIMIZER_RDS_MAXIMUM_CPU_PERCENT", "3")
 
     settings = Settings.from_environment()
 
@@ -35,6 +39,10 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.ebs_reference_gib_monthly_rate_usd == Decimal("0.10")
     assert settings.elastic_ip_reference_monthly_rate_usd == Decimal("4.00")
     assert settings.ebs_snapshot_minimum_age_days == 120
+    assert settings.utilization_lookback_days == 21
+    assert settings.ec2_maximum_cpu_percent == Decimal("4")
+    assert settings.ec2_maximum_total_network_bytes == Decimal("2048")
+    assert settings.rds_maximum_cpu_percent == Decimal("3")
 
 
 @pytest.mark.parametrize(

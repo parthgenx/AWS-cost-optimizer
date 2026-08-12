@@ -3,9 +3,10 @@
 ## What this milestone deploys
 
 The SAM template creates three on-demand DynamoDB tables, separate read-only
-scanner Lambdas for EBS volumes, Elastic IPs, and EBS snapshots, an isolated
-EBS cleanup Lambda, an SNS notification topic, EventBridge rules, and encrypted
-SQS dead-letter queues. It does not expose an API endpoint.
+scanner Lambdas for EBS volumes, Elastic IPs, EBS snapshots, EC2 utilization,
+RDS utilization, and Application Load Balancers, an isolated EBS cleanup
+Lambda, an SNS notification topic, EventBridge rules, and encrypted SQS
+dead-letter queues. It does not expose an API endpoint.
 
 ## Why AWS SAM
 
@@ -16,11 +17,13 @@ without adding an infrastructure framework that would obscure the project.
 ## Lambda flow
 
 1. A caller manually invokes one resource-specific scanner Lambda, or
-   EventBridge invokes the EBS scanner when scheduled scans are enabled.
+   EventBridge invokes every scanner when scheduled scans are enabled.
 2. The handler gets region and table names from environment variables.
 3. It extracts the AWS account ID from Lambda's invocation ARN, avoiding an
    extra STS API permission.
 4. It wires a boto3 resource adapter, pure rule, and DynamoDB repositories.
+   The EC2, RDS, and Application Load Balancer scanners also use a batched
+   CloudWatch metrics adapter for their utilization evidence.
 5. It emits scan metrics through structured CloudWatch logs.
 6. If findings exist, it publishes a compact summary to SNS.
 7. It returns a small scan summary and writes structured logs to CloudWatch.
@@ -53,11 +56,15 @@ completed successfully.
 
 ## IAM boundary
 
-Each scanner has a distinct, read-only EC2 permission: `ec2:DescribeVolumes`,
-`ec2:DescribeAddresses`, or `ec2:DescribeSnapshots`. Each may update the
-Findings table, create/update ScanRuns records, and publish summary
-notifications. These EC2 describe actions cannot be scoped to a specific
-resource ARN, so they necessarily use `Resource: "*"`.
+Each scanner receives only the read permissions it needs. The EBS, Elastic IP,
+snapshot, and EC2 scanners use the matching EC2 `Describe` action. The RDS
+scanner receives `rds:DescribeDBInstances` and `rds:ListTagsForResource`; the
+Application Load Balancer scanner receives `elasticloadbalancing:DescribeLoadBalancers`
+and `elasticloadbalancing:DescribeTags`; utilization scanners receive
+`cloudwatch:GetMetricData`. Each may update the Findings table, create/update
+ScanRuns records, and publish summary notifications. These discovery and metric
+read actions cannot be restricted to a specific resource ARN, so they use
+`Resource: "*"`.
 
 Only the isolated EBS cleanup Lambda has `ec2:DeleteVolume`, scoped to EBS
 volume ARNs in the deployed account and region. It is dry-run by default and

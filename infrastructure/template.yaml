@@ -26,6 +26,20 @@ Parameters:
     Type: String
     Default: ""
     Description: Optional email address for SNS finding notifications. The recipient must confirm the subscription.
+  CleanupDryRun:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Keep cleanup simulation-only unless deliberately disabled with cleanup execution enabled.
+  CleanupExecutionEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Explicitly allow the isolated cleanup Lambda to delete revalidated EBS volumes.
 
 Conditions:
   ScheduledScansEnabledCondition: !Equals [!Ref ScheduledScansEnabled, "true"]
@@ -59,6 +73,26 @@ Resources:
       KeySchema:
         - AttributeName: scan_id
           KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  AuditEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "aws-cost-optimizer-audit-events-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: finding_id
+          AttributeType: S
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: finding_id
+          KeyType: HASH
+        - AttributeName: event_id
+          KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -114,6 +148,113 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${EbsScannerFunction}"
       RetentionInDays: 30
+
+  EbsCleanupFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-ebs-cleanup-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.ebs_cleanup.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 60
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: ebs-cleanup
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME: !Ref AuditEventsTable
+          COST_OPTIMIZER_CLEANUP_DRY_RUN: !Ref CleanupDryRun
+          COST_OPTIMIZER_CLEANUP_EXECUTION_ENABLED: !Ref CleanupExecutionEnabled
+      Policies:
+        - Statement:
+            - Sid: ReadAndTransitionFindings
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: WriteAtomicFindingAuditTransitions
+              Effect: Allow
+              Action:
+                - dynamodb:TransactWriteItems
+              Resource:
+                - !GetAtt FindingsTable.Arn
+                - !GetAtt AuditEventsTable.Arn
+            - Sid: DescribeEbsVolumesForRevalidation
+              Effect: Allow
+              Action:
+                - ec2:DescribeVolumes
+              Resource: "*"
+            - Sid: DeleteOnlyEbsVolumesInThisAccountAndRegion
+              Effect: Allow
+              Action:
+                - ec2:DeleteVolume
+              Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
+
+  EbsCleanupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${EbsCleanupFunction}"
+      RetentionInDays: 30
+
+  CleanupRequestRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "aws-cost-optimizer-cleanup-request-${Environment}"
+      Description: !Sub "Routes explicit cleanup requests to the isolated EBS cleanup worker for ${Environment}."
+      EventPattern:
+        source:
+          - aws-cost-optimizer.cleanup
+        detail-type:
+          - CleanupRequested
+      State: ENABLED
+      Targets:
+        - Id: EbsCleanup
+          Arn: !GetAtt EbsCleanupFunction.Arn
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 3
+          DeadLetterConfig:
+            Arn: !GetAtt CleanupRequestDeadLetterQueue.Arn
+
+  CleanupRequestDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "aws-cost-optimizer-cleanup-request-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  CleanupRequestDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref CleanupRequestDeadLetterQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToWriteFailedCleanupRequests
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt CleanupRequestDeadLetterQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt CleanupRequestRule.Arn
+
+  AllowEventBridgeToInvokeEbsCleanup:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EbsCleanupFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CleanupRequestRule.Arn
 
   ScanNotificationsTopic:
     Type: AWS::SNS::Topic
@@ -182,12 +323,21 @@ Outputs:
   EbsScannerFunctionName:
     Description: Lambda function name for manual scan invocation.
     Value: !Ref EbsScannerFunction
+  EbsCleanupFunctionName:
+    Description: Isolated Lambda that dry-runs or cleans one approved EBS finding.
+    Value: !Ref EbsCleanupFunction
+  CleanupRequestDeadLetterQueueUrl:
+    Description: SQS queue containing cleanup requests that exhausted EventBridge retries.
+    Value: !Ref CleanupRequestDeadLetterQueue
   FindingsTableName:
     Description: DynamoDB table that stores deduplicated findings.
     Value: !Ref FindingsTable
   ScanRunsTableName:
     Description: DynamoDB table that stores scan execution records.
     Value: !Ref ScanRunsTable
+  AuditEventsTableName:
+    Description: DynamoDB table containing append-only finding lifecycle audit events.
+    Value: !Ref AuditEventsTable
   ScanNotificationsTopicArn:
     Description: SNS topic used for finding notifications.
     Value: !Ref ScanNotificationsTopic

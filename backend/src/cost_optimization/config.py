@@ -29,7 +29,10 @@ class Settings(BaseModel):
     aws_region: str | None = Field(default=None, min_length=1, max_length=64)
     findings_table_name: str | None = Field(default=None, min_length=3, max_length=255)
     scan_runs_table_name: str | None = Field(default=None, min_length=3, max_length=255)
+    audit_events_table_name: str | None = Field(default=None, min_length=3, max_length=255)
     scan_notifications_topic_arn: str | None = Field(default=None, min_length=1, max_length=2048)
+    cleanup_dry_run: bool = True
+    cleanup_execution_enabled: bool = False
     ebs_unattached_minimum_volume_age_days: int = Field(default=14, ge=1, le=3650)
     ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
 
@@ -64,8 +67,13 @@ class Settings(BaseModel):
                 "aws_region": os.getenv("AWS_REGION"),
                 "findings_table_name": os.getenv("COST_OPTIMIZER_FINDINGS_TABLE_NAME"),
                 "scan_runs_table_name": os.getenv("COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME"),
+                "audit_events_table_name": os.getenv("COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME"),
                 "scan_notifications_topic_arn": os.getenv(
                     "COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN"
+                ),
+                "cleanup_dry_run": os.getenv("COST_OPTIMIZER_CLEANUP_DRY_RUN", "true"),
+                "cleanup_execution_enabled": os.getenv(
+                    "COST_OPTIMIZER_CLEANUP_EXECUTION_ENABLED", "false"
                 ),
                 "ebs_unattached_minimum_volume_age_days": os.getenv(
                     "COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS", "14"
@@ -85,6 +93,21 @@ class Settings(BaseModel):
         if not self.scan_runs_table_name:
             raise RuntimeError("COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME is required")
         return self.aws_region, self.findings_table_name, self.scan_runs_table_name
+
+    def require_approval_configuration(self) -> tuple[str, str]:
+        """Return table names required by an approval workflow."""
+        if not self.findings_table_name:
+            raise RuntimeError("COST_OPTIMIZER_FINDINGS_TABLE_NAME is required")
+        if not self.audit_events_table_name:
+            raise RuntimeError("COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME is required")
+        return self.findings_table_name, self.audit_events_table_name
+
+    def require_cleanup_configuration(self) -> tuple[str, str, str]:
+        """Return the minimum settings required by the isolated cleanup Lambda."""
+        if not self.aws_region:
+            raise RuntimeError("AWS_REGION is required for the cleanup Lambda")
+        findings_table_name, audit_events_table_name = self.require_approval_configuration()
+        return self.aws_region, findings_table_name, audit_events_table_name
 
 
 @lru_cache

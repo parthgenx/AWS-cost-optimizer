@@ -4,7 +4,10 @@
 
 A production-minded AWS cost-optimization platform that identifies avoidable cloud spend, estimates potential monthly savings, and supports safe, approval-gated cleanup workflows.
 
-> Current status: active development. The project includes a tested EBS detection foundation and durable finding/scan-record persistence. AWS infrastructure deployment, scheduled scans, notifications, and cleanup actions are still in progress.
+> Current status: active development. EBS detection, durable finding records,
+> scheduled scans, notifications, approval auditing, EventBridge cleanup
+> requests, and a dry-run-first EBS cleanup worker are implemented. Production
+> API authentication and additional resource rules remain in progress.
 
 ## Problem
 
@@ -31,7 +34,7 @@ Every destructive action will require explicit approval and a final live AWS-sta
 | Costing | Monthly savings estimates | EBS reference-rate estimate implemented |
 | Persistence | Findings and scan-run records | Implemented |
 | Safety | Resource exclusion tags | Implemented |
-| Safety | Approval, dry-run, and revalidation | Planned |
+| Safety | Approval audit, explicit cleanup request, dry-run, and revalidation | Implemented for EBS |
 | Operations | Scheduled EBS scans, SNS finding notifications, retry/DLQ, and CloudWatch metrics | Implemented |
 
 EC2, RDS, and load-balancer findings will be recommendations—not automatic cleanup candidates. Low activity does not prove that a production workload is safe to remove.
@@ -63,6 +66,10 @@ API / worker handlers → application services → domain → infrastructure ada
 - **Application:** coordinates use cases such as scans and approvals.
 - **Infrastructure:** contains boto3, DynamoDB, SNS, and EventBridge adapters.
 - **API/workers:** thin HTTP and Lambda entry points.
+
+The FastAPI application currently runs locally or in a trusted environment;
+API Gateway and Cognito deployment are intentionally deferred until the
+authentication boundary is implemented.
 
 ## Implemented: unattached EBS volume detection
 
@@ -106,6 +113,27 @@ The system records:
 - Sanitized failure type when a scan fails
 
 DynamoDB writes are designed to be atomic and idempotent.
+
+## Approval and safe EBS cleanup
+
+Cleanup is intentionally a separate path from scanning. An operator first
+approves an `open` finding, then makes a second, explicit cleanup request. The
+request is published to EventBridge, which invokes a separate cleanup Lambda.
+That Lambda has the only EBS delete permission; the scanner remains read-only.
+
+Before deleting, the cleanup Lambda reloads the finding, confirms it is still
+approved, re-fetches the exact EBS volume, and evaluates the existing rule
+again. Dry-run is enabled by default. Real deletion requires both deployment
+parameters below, so changing only one cannot enable deletion accidentally:
+
+```text
+CleanupDryRun=false CleanupExecutionEnabled=true
+```
+
+The FastAPI approval endpoints are currently a local/trusted-operator
+interface. The `X-Operator-ID` header is not an authentication mechanism; a
+Cognito/API Gateway identity boundary is required before exposing this API on
+the internet.
 
 ## Technology stack
 
@@ -212,8 +240,9 @@ SAM_CLI_TELEMETRY=0 sam build \
 ```
 
 Deploy the built package. The command creates the `aws-cost-optimizer-dev`
-CloudFormation stack, including the scanner Lambda, DynamoDB tables, and
-CloudWatch log group.
+CloudFormation stack, including scanner and cleanup Lambdas, DynamoDB tables,
+EventBridge rules, and CloudWatch log groups. Cleanup remains dry-run-only by
+default.
 
 ```bash
 SAM_CLI_TELEMETRY=0 sam deploy \

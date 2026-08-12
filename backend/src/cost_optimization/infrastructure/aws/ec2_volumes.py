@@ -8,6 +8,7 @@ from typing import Protocol, cast
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from cost_optimization.domain.models import (
     EbsVolume,
@@ -29,6 +30,12 @@ class Ec2VolumesClient(Protocol):
 
     def get_paginator(self, operation_name: str) -> Ec2VolumesPaginator:
         """Return a paginator for the requested EC2 operation."""
+
+    def describe_volumes(self, **kwargs: object) -> Mapping[str, object]:
+        """Describe explicitly named EBS volumes."""
+
+    def delete_volume(self, **kwargs: object) -> Mapping[str, object]:
+        """Delete one EBS volume."""
 
 
 class AwsResponseFormatError(ValueError):
@@ -61,6 +68,25 @@ class Boto3EbsVolumeDiscovery:
             for raw_volume in _required_list(page, "Volumes"):
                 volumes.append(self._to_domain_volume(_required_mapping(raw_volume, "volume")))
         return volumes
+
+    def get_volume(self, volume_id: str) -> EbsVolume | None:
+        """Retrieve exactly one volume for cleanup revalidation."""
+        try:
+            response = self._client.describe_volumes(VolumeIds=[volume_id])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "InvalidVolume.NotFound":
+                return None
+            raise
+        raw_volumes = _required_list(response, "Volumes")
+        if not raw_volumes:
+            return None
+        if len(raw_volumes) != 1:
+            raise AwsResponseFormatError("describe_volumes returned more than one requested volume")
+        return self._to_domain_volume(_required_mapping(raw_volumes[0], "volume"))
+
+    def delete_volume(self, volume_id: str) -> None:
+        """Delete a previously revalidated volume."""
+        self._client.delete_volume(VolumeId=volume_id)
 
     def _to_domain_volume(self, raw_volume: Mapping[str, object]) -> EbsVolume:
         volume_id = _required_string(raw_volume, "VolumeId")

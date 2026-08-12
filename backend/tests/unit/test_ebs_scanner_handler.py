@@ -7,6 +7,7 @@ import pytest
 from cost_optimization.config import Environment, Settings
 from cost_optimization.domain.findings import ScanRun
 from cost_optimization.workers import ebs_scanner
+from cost_optimization.workers.lambda_identity import account_id_from_lambda_arn
 
 
 def test_run_scan_composes_workflow_and_returns_safe_summary(
@@ -47,7 +48,7 @@ def test_run_scan_composes_workflow_and_returns_safe_summary(
 
 def test_account_id_from_lambda_arn_rejects_invalid_arns() -> None:
     with pytest.raises(ValueError, match="valid Lambda ARN"):
-        ebs_scanner.account_id_from_lambda_arn("not-an-arn")
+        account_id_from_lambda_arn("not-an-arn")
 
 
 def test_settings_require_scanner_configuration() -> None:

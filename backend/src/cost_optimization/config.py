@@ -35,6 +35,8 @@ class Settings(BaseModel):
     cleanup_execution_enabled: bool = False
     ebs_unattached_minimum_volume_age_days: int = Field(default=14, ge=1, le=3650)
     ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
+    elastic_ip_reference_monthly_rate_usd: Decimal = Field(default=Decimal("3.60"), gt=Decimal("0"))
+    ebs_snapshot_minimum_age_days: int = Field(default=90, ge=1, le=3650)
 
     @field_validator("log_level")
     @classmethod
@@ -80,6 +82,12 @@ class Settings(BaseModel):
                 ),
                 "ebs_reference_gib_monthly_rate_usd": os.getenv(
                     "COST_OPTIMIZER_EBS_REFERENCE_GIB_MONTHLY_RATE_USD", "0.08"
+                ),
+                "elastic_ip_reference_monthly_rate_usd": os.getenv(
+                    "COST_OPTIMIZER_ELASTIC_IP_REFERENCE_MONTHLY_RATE_USD", "3.60"
+                ),
+                "ebs_snapshot_minimum_age_days": os.getenv(
+                    "COST_OPTIMIZER_EBS_SNAPSHOT_MINIMUM_AGE_DAYS", "90"
                 ),
             }
         )

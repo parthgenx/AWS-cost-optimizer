@@ -149,6 +149,108 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${EbsScannerFunction}"
       RetentionInDays: 30
 
+  ElasticIpScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-elastic-ip-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.elastic_ip_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 60
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: elastic-ip-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+      Policies:
+        - Statement:
+            - Sid: DescribeElasticIps
+              Effect: Allow
+              Action:
+                - ec2:DescribeAddresses
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
+
+  ElasticIpScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ElasticIpScannerFunction}"
+      RetentionInDays: 30
+
+  EbsSnapshotScannerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-ebs-snapshot-scanner-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.ebs_snapshot_scanner.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 60
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: ebs-snapshot-scanner
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
+          COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+      Policies:
+        - Statement:
+            - Sid: DescribeOwnedEbsSnapshots
+              Effect: Allow
+              Action:
+                - ec2:DescribeSnapshots
+              Resource: "*"
+            - Sid: PersistFindings
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: PersistScanRuns
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt ScanRunsTable.Arn
+            - Sid: PublishFindingNotifications
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref ScanNotificationsTopic
+
+  EbsSnapshotScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${EbsSnapshotScannerFunction}"
+      RetentionInDays: 30
+
   EbsCleanupFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -323,6 +425,12 @@ Outputs:
   EbsScannerFunctionName:
     Description: Lambda function name for manual scan invocation.
     Value: !Ref EbsScannerFunction
+  ElasticIpScannerFunctionName:
+    Description: Lambda function name for manual Elastic IP scan invocation.
+    Value: !Ref ElasticIpScannerFunction
+  EbsSnapshotScannerFunctionName:
+    Description: Lambda function name for manual EBS snapshot scan invocation.
+    Value: !Ref EbsSnapshotScannerFunction
   EbsCleanupFunctionName:
     Description: Isolated Lambda that dry-runs or cleans one approved EBS finding.
     Value: !Ref EbsCleanupFunction

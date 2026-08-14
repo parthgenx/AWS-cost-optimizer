@@ -16,6 +16,7 @@ from cost_optimization.api.schemas import (
     FindingApprovalResponse,
     HealthResponse,
 )
+from cost_optimization.api.security import OperatorIdentityResolver
 from cost_optimization.application.services.approve_finding import (
     ApproveFinding,
     FindingNotFoundError,
@@ -43,6 +44,7 @@ def create_app(
     *,
     approval_service: ApproveFinding | None = None,
     cleanup_request_service: RequestCleanup | None = None,
+    operator_identity_resolver: OperatorIdentityResolver | None = None,
 ) -> FastAPI:
     """Create the HTTP application with explicitly supplied or env settings."""
     application_settings = settings or get_settings()
@@ -65,6 +67,9 @@ def create_app(
     )
     app.state.cleanup_request_service = (
         cleanup_request_service or _cleanup_request_service_from_settings(application_settings)
+    )
+    app.state.operator_identity_resolver = operator_identity_resolver or OperatorIdentityResolver(
+        application_settings
     )
 
     @app.middleware("http")
@@ -96,12 +101,8 @@ def create_app(
         tags=["Findings"],
     )
     async def approve_finding(finding_id: str, request: Request) -> FindingApprovalResponse:
-        """Approve an open finding using a trusted operator identity from the transport layer."""
-        approved_by = request.headers.get("X-Operator-ID")
-        if not approved_by:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="X-Operator-ID is required"
-            )
+        """Approve an open finding using a verified identity from the transport layer."""
+        approved_by = app.state.operator_identity_resolver.resolve(request)
         service = app.state.approval_service
         if service is None:
             raise HTTPException(
@@ -135,11 +136,7 @@ def create_app(
     )
     async def request_cleanup(finding_id: str, request: Request) -> CleanupRequestResponse:
         """Publish a separate EventBridge request; approval alone never starts deletion."""
-        requested_by = request.headers.get("X-Operator-ID")
-        if not requested_by:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="X-Operator-ID is required"
-            )
+        requested_by = app.state.operator_identity_resolver.resolve(request)
         service = app.state.cleanup_request_service
         if service is None:
             raise HTTPException(

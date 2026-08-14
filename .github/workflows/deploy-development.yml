@@ -1,0 +1,64 @@
+name: Deploy development environment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-cost-optimizer-development-deployment
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  STACK_NAME: aws-cost-optimizer-dev
+
+jobs:
+  deploy:
+    name: Deploy development stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: aws-actions/setup-sam@v2
+
+      - name: Configure temporary AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: aws-cost-optimizer-${{ github.run_id }}
+
+      - name: Validate infrastructure
+        run: sam validate --lint --template infrastructure/template.yaml
+
+      - name: Build Lambda artifacts in Linux containers
+        run: sam build --template-file infrastructure/template.yaml --use-container
+
+      - name: Deploy safe development configuration
+        run: >-
+          sam deploy
+          --template-file .aws-sam/build/template.yaml
+          --stack-name "$STACK_NAME"
+          --region "$AWS_REGION"
+          --s3-bucket "${{ vars.AWS_SAM_ARTIFACT_BUCKET }}"
+          --s3-prefix "aws-cost-optimizer/${{ github.sha }}"
+          --capabilities CAPABILITY_IAM
+          --parameter-overrides
+          Environment=dev
+          ScheduledScansEnabled=false
+          CleanupDryRun=true
+          CleanupExecutionEnabled=false
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset

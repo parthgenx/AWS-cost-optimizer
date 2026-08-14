@@ -26,6 +26,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Optional email address for SNS finding notifications. The recipient must confirm the subscription.
+  OperationalAlertEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for operational alarm notifications. The recipient must confirm the subscription.
   CleanupDryRun:
     Type: String
     Default: "true"
@@ -67,6 +71,7 @@ Parameters:
 Conditions:
   ScheduledScansEnabledCondition: !Equals [!Ref ScheduledScansEnabled, "true"]
   NotificationEmailConfigured: !Not [!Equals [!Ref NotificationEmail, ""]]
+  OperationalAlertEmailConfigured: !Not [!Equals [!Ref OperationalAlertEmail, ""]]
 
 Resources:
   FindingsTable:
@@ -120,6 +125,130 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
+
+  ApiUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "aws-cost-optimizer-operators-${Environment}"
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      MfaConfiguration: OPTIONAL
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 3
+
+  ApiUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "aws-cost-optimizer-api-${Environment}"
+      UserPoolId: !Ref ApiUserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+
+  ApiOperatorsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: cost-optimizer-operators
+      Description: Operators allowed to approve findings and request EBS cleanup.
+      UserPoolId: !Ref ApiUserPool
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/aws-cost-optimizer-${Environment}"
+      RetentionInDays: 30
+
+  CostOptimizationHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage"}
+      Auth:
+        DefaultAuthorizer: CognitoJwtAuthorizer
+        Authorizers:
+          CognitoJwtAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              audience:
+                - !Ref ApiUserPoolClient
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${ApiUserPool}"
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      FunctionName: !Sub "aws-cost-optimizer-api-${Environment}"
+      CodeUri: ../backend/
+      Handler: cost_optimization.workers.api.handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 512
+      Timeout: 30
+      Tracing: Active
+      Environment:
+        Variables:
+          COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
+          COST_OPTIMIZER_SERVICE_NAME: cost-optimization-api
+          COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME: !Ref AuditEventsTable
+          COST_OPTIMIZER_OPERATOR_IDENTITY_SOURCE: api_gateway_jwt
+          COST_OPTIMIZER_REQUIRED_OPERATOR_GROUP: !Ref ApiOperatorsGroup
+      Policies:
+        - Statement:
+            - Sid: ReadFindingsForApprovalAndCleanupRequests
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+              Resource: !GetAtt FindingsTable.Arn
+            - Sid: ApproveFindingsWithAuditTrail
+              Effect: Allow
+              Action:
+                - dynamodb:TransactWriteItems
+              Resource:
+                - !GetAtt FindingsTable.Arn
+                - !GetAtt AuditEventsTable.Arn
+            - Sid: PublishExplicitCleanupRequests
+              Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Events:
+        AuthenticatedApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CostOptimizationHttpApi
+            Path: /{proxy+}
+            Method: ANY
+            PayloadFormatVersion: "2.0"
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApiFunction}"
+      RetentionInDays: 30
 
   EbsScannerFunction:
     Type: AWS::Serverless::Function
@@ -570,6 +699,292 @@ Resources:
       Endpoint: !Ref NotificationEmail
       TopicArn: !Ref ScanNotificationsTopic
 
+  OperationalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "aws-cost-optimizer-operational-alerts-${Environment}"
+
+  OperationalAlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: OperationalAlertEmailConfigured
+    Properties:
+      Protocol: email
+      Endpoint: !Ref OperationalAlertEmail
+      TopicArn: !Ref OperationalAlertsTopic
+
+  ScannerFunctionErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "aws-cost-optimizer-scanner-errors-${Environment}"
+      AlarmDescription: Any read-only scanner Lambda returned an error in the last five minutes.
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 0
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: ebs
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref EbsScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: elasticip
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref ElasticIpScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: snapshot
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref EbsSnapshotScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: ec2utilization
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref Ec2UtilizationScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: rdsutilization
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref RdsUtilizationScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: albutilization
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref ApplicationLoadBalancerScannerFunction
+            Period: 300
+            Stat: Sum
+        - Id: totalerrors
+          Label: Scanner errors
+          Expression: SUM([ebs,elasticip,snapshot,ec2utilization,rdsutilization,albutilization])
+          ReturnData: true
+      AlarmActions:
+        - !Ref OperationalAlertsTopic
+
+  CriticalWorkflowErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "aws-cost-optimizer-critical-workflow-errors-${Environment}"
+      AlarmDescription: The authenticated API or isolated EBS cleanup Lambda returned an error in the last five minutes.
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 0
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: api
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref ApiFunction
+            Period: 300
+            Stat: Sum
+        - Id: cleanup
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref EbsCleanupFunction
+            Period: 300
+            Stat: Sum
+        - Id: totalerrors
+          Label: Critical workflow errors
+          Expression: SUM([api,cleanup])
+          ReturnData: true
+      AlarmActions:
+        - !Ref OperationalAlertsTopic
+
+  ApiGatewayServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "aws-cost-optimizer-api-5xx-${Environment}"
+      AlarmDescription: API Gateway returned a 5xx response in the last five minutes.
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref CostOptimizationHttpApi
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationalAlertsTopic
+
+  DeadLetterQueueMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "aws-cost-optimizer-dlq-messages-${Environment}"
+      AlarmDescription: A failed EventBridge invocation is waiting for investigation in a dead-letter queue.
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 0
+      TreatMissingData: notBreaching
+      Metrics:
+        - Id: scheduled
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !GetAtt ScheduledScanDeadLetterQueue.QueueName
+            Period: 300
+            Stat: Maximum
+        - Id: cleanup
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !GetAtt CleanupRequestDeadLetterQueue.QueueName
+            Period: 300
+            Stat: Maximum
+        - Id: totalmessages
+          Label: Visible DLQ messages
+          Expression: SUM([scheduled,cleanup])
+          ReturnData: true
+      AlarmActions:
+        - !Ref OperationalAlertsTopic
+
+  OperationalDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "aws-cost-optimizer-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda errors",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${EbsScannerFunction}" ],
+                  [ ".", ".", ".", "${ElasticIpScannerFunction}" ],
+                  [ ".", ".", ".", "${EbsSnapshotScannerFunction}" ],
+                  [ ".", ".", ".", "${Ec2UtilizationScannerFunction}" ],
+                  [ ".", ".", ".", "${RdsUtilizationScannerFunction}" ],
+                  [ ".", ".", ".", "${ApplicationLoadBalancerScannerFunction}" ],
+                  [ ".", ".", ".", "${ApiFunction}" ],
+                  [ ".", ".", ".", "${EbsCleanupFunction}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Scanner outcomes",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [ { "expression": "SEARCH('{AwsCostOptimizer,Environment,ScannerName} MetricName=\\\"CompletedScans\\\" Environment=\\\"${Environment}\\\"', 'Sum', 300)", "id": "completed", "label": "Completed scans" } ],
+                  [ { "expression": "SEARCH('{AwsCostOptimizer,Environment,ScannerName} MetricName=\\\"FailedScans\\\" Environment=\\\"${Environment}\\\"', 'Sum', 300)", "id": "failed", "label": "Failed scans" } ],
+                  [ { "expression": "SEARCH('{AwsCostOptimizer,Environment,ScannerName} MetricName=\\\"FindingsDetected\\\" Environment=\\\"${Environment}\\\"', 'Sum', 300)", "id": "findings", "label": "Findings detected" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Dead-letter queue messages",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stat": "Maximum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ScheduledScanDeadLetterQueue.QueueName}" ],
+                  [ ".", ".", ".", "${CleanupRequestDeadLetterQueue.QueueName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "API Gateway responses",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/ApiGateway", "4xx", "ApiId", "${CostOptimizationHttpApi}" ],
+                  [ ".", "5xx", ".", "." ]
+                ]
+              }
+            }
+          ]
+        }
+
   ScheduledScanDeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
@@ -718,6 +1133,21 @@ Resources:
       SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
 
 Outputs:
+  OperationalDashboardName:
+    Description: CloudWatch dashboard for scanner, workflow, queue, and API health.
+    Value: !Ref OperationalDashboard
+  OperationalAlertsTopicArn:
+    Description: SNS topic used for operational alarm notifications.
+    Value: !Ref OperationalAlertsTopic
+  ApiEndpoint:
+    Description: JWT-protected API Gateway endpoint for operational API requests.
+    Value: !Sub "https://${CostOptimizationHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  ApiUserPoolId:
+    Description: Cognito user pool containing approved API operators.
+    Value: !Ref ApiUserPool
+  ApiUserPoolClientId:
+    Description: Cognito app-client ID used as the API Gateway JWT audience.
+    Value: !Ref ApiUserPoolClient
   EbsScannerFunctionName:
     Description: Lambda function name for manual scan invocation.
     Value: !Ref EbsScannerFunction

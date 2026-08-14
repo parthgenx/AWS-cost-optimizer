@@ -11,7 +11,7 @@
    detection, plus conservative CloudWatch-backed EC2, RDS, and Application
    Load Balancer recommendations, completed. These recommendations are
    deliberately read-only.
-6. **Production hardening:** Cognito authorization, alarms, OIDC deployment,
-   runbooks, and sandbox end-to-end testing.
+6. **Production hardening:** Cognito authorization completed; alarms, OIDC
+   deployment, runbooks, and sandbox end-to-end testing remain.
 
 Each milestone is reviewed before the next starts.

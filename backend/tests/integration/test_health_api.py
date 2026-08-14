@@ -39,7 +39,7 @@ def test_health_endpoint_returns_operational_metadata() -> None:
     assert response.headers["X-Correlation-ID"] == "correlation-123"
 
 
-def test_approval_endpoint_uses_operator_identity_from_header() -> None:
+def test_approval_endpoint_uses_operator_identity_from_trusted_local_header() -> None:
     finding = Finding.from_candidate(_candidate(), datetime(2026, 8, 12, tzinfo=UTC))
     app = create_app(
         Settings(environment=Environment.TESTING),
@@ -63,8 +63,8 @@ def test_approval_endpoint_requires_an_operator_identity() -> None:
     with TestClient(app) as client:
         response = client.post("/findings/finding-123/approval")
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "X-Operator-ID is required"
+    assert response.status_code == 401
+    assert response.json()["detail"] == "X-Operator-ID is required in trusted local mode"
 
 
 def test_cleanup_request_endpoint_needs_a_separate_operator_action() -> None:

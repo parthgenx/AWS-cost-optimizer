@@ -19,6 +19,13 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+class OperatorIdentitySource(StrEnum):
+    """Trusted transport mechanisms for the identity recorded in an audit event."""
+
+    TRUSTED_HEADER = "trusted_header"
+    API_GATEWAY_JWT = "api_gateway_jwt"
+
+
 class Settings(BaseModel):
     """Validated settings shared by API and future worker entry points."""
 
@@ -33,6 +40,10 @@ class Settings(BaseModel):
     scan_notifications_topic_arn: str | None = Field(default=None, min_length=1, max_length=2048)
     cleanup_dry_run: bool = True
     cleanup_execution_enabled: bool = False
+    operator_identity_source: OperatorIdentitySource = OperatorIdentitySource.TRUSTED_HEADER
+    required_operator_group: str = Field(
+        default="cost-optimizer-operators", min_length=1, max_length=128
+    )
     ebs_unattached_minimum_volume_age_days: int = Field(default=14, ge=1, le=3650)
     ebs_reference_gib_monthly_rate_usd: Decimal = Field(default=Decimal("0.08"), gt=Decimal("0"))
     elastic_ip_reference_monthly_rate_usd: Decimal = Field(default=Decimal("3.60"), gt=Decimal("0"))
@@ -84,6 +95,12 @@ class Settings(BaseModel):
                 "cleanup_dry_run": os.getenv("COST_OPTIMIZER_CLEANUP_DRY_RUN", "true"),
                 "cleanup_execution_enabled": os.getenv(
                     "COST_OPTIMIZER_CLEANUP_EXECUTION_ENABLED", "false"
+                ),
+                "operator_identity_source": os.getenv(
+                    "COST_OPTIMIZER_OPERATOR_IDENTITY_SOURCE", "trusted_header"
+                ),
+                "required_operator_group": os.getenv(
+                    "COST_OPTIMIZER_REQUIRED_OPERATOR_GROUP", "cost-optimizer-operators"
                 ),
                 "ebs_unattached_minimum_volume_age_days": os.getenv(
                     "COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS", "14"

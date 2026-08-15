@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from cost_optimization.domain.findings import (
     AuditEvent,
     AuditEventType,
@@ -73,9 +75,151 @@ def test_scan_run_repository_uses_conditional_state_transitions() -> None:
     repository.complete(scan_run, completed_at=started_at, evaluated_count=4, finding_count=2)
 
     assert table.put_requests[0]["ConditionExpression"] == "attribute_not_exists(scan_id)"
+    assert table.put_requests[0]["Item"]["dashboard_partition"] == "all"
     complete_request = table.update_requests[0]
     assert complete_request["ConditionExpression"] == "#status = :running"
     assert complete_request["ExpressionAttributeValues"][":finding_count"] == 2
+
+
+def test_finding_repository_queries_status_index_with_optional_filters_and_cursor() -> None:
+    candidate = _candidate()
+    now = datetime(2026, 8, 3, tzinfo=UTC)
+    table = FakeTable(
+        update_response={},
+        query_responses=[
+            {
+                "Items": [
+                    {
+                        "finding_id": finding_id_for(candidate),
+                        "rule_id": candidate.rule_id,
+                        "resource_type": "ebs_volume",
+                        "resource_id": candidate.resource.resource_id,
+                        "account_id": candidate.resource.account_id,
+                        "region": candidate.resource.region,
+                        "summary": candidate.summary,
+                        "recommended_action": candidate.recommended_action,
+                        "severity": "low",
+                        "status": "open",
+                        "estimated_monthly_savings_amount": Decimal("1.60"),
+                        "estimated_monthly_savings_currency": "USD",
+                        "evidence": {"state": "available"},
+                        "first_detected_at": now.isoformat(),
+                        "last_detected_at": now.isoformat(),
+                        "occurrence_count": 1,
+                    }
+                ],
+                "LastEvaluatedKey": {
+                    "finding_id": finding_id_for(candidate),
+                    "status": "open",
+                    "last_detected_at": now.isoformat(),
+                },
+            }
+        ],
+    )
+
+    page = DynamoDbFindingRepository(table).list_by_status(
+        status=FindingStatus.OPEN,
+        resource_type=ResourceType.EBS_VOLUME,
+        severity=FindingSeverity.LOW,
+        limit=25,
+        cursor=None,
+    )
+
+    request = table.query_requests[0]
+    assert request["IndexName"] == "FindingsByStatusLastDetectedAtIndex"
+    assert request["KeyConditionExpression"] == "#status = :status"
+    assert request["FilterExpression"] == (
+        "#resource_type = :resource_type AND #severity = :severity"
+    )
+    assert request["ScanIndexForward"] is False
+    assert page.items[0].finding_id == finding_id_for(candidate)
+    assert page.next_cursor is not None
+
+
+def test_finding_summary_accumulates_each_status_index_page() -> None:
+    table = FakeTable(
+        update_response={},
+        query_responses=[
+            {
+                "Items": [
+                    {
+                        "estimated_monthly_savings_amount": Decimal("1.60"),
+                        "estimated_monthly_savings_currency": "USD",
+                    },
+                    {},
+                ],
+                "LastEvaluatedKey": {
+                    "finding_id": "finding-1",
+                    "status": "open",
+                    "last_detected_at": "2026-08-03T00:00:00+00:00",
+                },
+            },
+            {
+                "Items": [
+                    {
+                        "estimated_monthly_savings_amount": Decimal("2.40"),
+                        "estimated_monthly_savings_currency": "USD",
+                    }
+                ]
+            },
+        ],
+    )
+
+    summary = DynamoDbFindingRepository(table).summarize_by_status(status=FindingStatus.OPEN)
+
+    assert summary.finding_count == 3
+    assert summary.findings_with_known_savings_count == 2
+    assert summary.known_monthly_savings_by_currency["USD"] == Money(
+        amount=Decimal("4.00"), currency="USD"
+    )
+    assert table.query_requests[1]["ExclusiveStartKey"] == {
+        "finding_id": "finding-1",
+        "status": "open",
+        "last_detected_at": "2026-08-03T00:00:00+00:00",
+    }
+
+
+def test_finding_repository_rejects_a_malformed_pagination_cursor() -> None:
+    table = FakeTable(update_response={})
+
+    with pytest.raises(ValueError, match="Pagination cursor is invalid"):
+        DynamoDbFindingRepository(table).list_by_status(
+            status=FindingStatus.OPEN,
+            resource_type=None,
+            severity=None,
+            limit=25,
+            cursor="not-a-valid-cursor",
+        )
+
+    assert table.query_requests == []
+
+
+def test_scan_run_repository_queries_dashboard_activity_index() -> None:
+    started_at = datetime(2026, 8, 3, tzinfo=UTC)
+    table = FakeTable(
+        update_response={},
+        query_responses=[
+            {
+                "Items": [
+                    {
+                        "scan_id": "scan-123",
+                        "scanner_name": "unattached-ebs-volume",
+                        "started_at": started_at.isoformat(),
+                        "status": "completed",
+                        "completed_at": started_at.isoformat(),
+                        "evaluated_resource_count": Decimal("0"),
+                        "finding_count": Decimal("0"),
+                    }
+                ]
+            }
+        ],
+    )
+
+    page = DynamoDbScanRunRepository(table).list_recent(limit=25, cursor=None)
+
+    assert table.query_requests[0]["IndexName"] == "ScanRunsByStartedAtIndex"
+    assert table.query_requests[0]["ExpressionAttributeValues"] == {":partition": "all"}
+    assert page.items[0].evaluated_resource_count == 0
 
 
 def test_approval_repository_commits_finding_and_audit_event_in_one_transaction() -> None:
@@ -135,10 +279,17 @@ def test_lifecycle_repository_guards_transition_and_persists_its_audit_event() -
 
 
 class FakeTable:
-    def __init__(self, *, update_response: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        *,
+        update_response: Mapping[str, object],
+        query_responses: list[Mapping[str, object]] | None = None,
+    ) -> None:
         self._update_response = update_response
+        self._query_responses = list(query_responses or [])
         self.put_requests: list[dict[str, object]] = []
         self.update_requests: list[dict[str, object]] = []
+        self.query_requests: list[dict[str, object]] = []
 
     def put_item(self, **kwargs: object) -> Mapping[str, object]:
         self.put_requests.append(kwargs)
@@ -151,6 +302,10 @@ class FakeTable:
     def get_item(self, **kwargs: object) -> Mapping[str, object]:
         del kwargs
         return {}
+
+    def query(self, **kwargs: object) -> Mapping[str, object]:
+        self.query_requests.append(kwargs)
+        return self._query_responses.pop(0)
 
 
 class FakeDynamoDbClient:

@@ -27,9 +27,23 @@ instead of creating duplicate records. The adapter uses one atomic
 - preserves the existing lifecycle status rather than reopening a dismissed or
   approved finding.
 
-Later, add a GSI for the API query pattern `status + last_detected_at`. Do not
-add it until the list-findings endpoint is implemented and its query details
-are fixed.
+The dashboard uses `FindingsByStatusLastDetectedAtIndex` with:
+
+```text
+status (partition key) + last_detected_at (sort key, newest first)
+```
+
+The API requires one lifecycle status per query, defaulting to `open`. Resource
+type and severity are bounded filters on that result set. This supports the
+dashboard's principal access pattern without maintaining an index for every
+possible filter combination. The index projects all finding fields so a list
+page requires one DynamoDB query instead of one query plus many point reads.
+
+The overview calculates an exact count and total of only rule-provided savings
+estimates by traversing the `open` index with a narrow projection. It does not
+claim to be an AWS billing total. If a future account has enough findings for
+that read to become expensive, the next step is a transactionally maintained
+summary record—not a DynamoDB table scan.
 
 ## ScanRuns table
 
@@ -43,20 +57,32 @@ details.
 Scan starts use a conditional `PutItem`; terminal updates require the existing
 state to be `running`. This prevents duplicate completion transitions.
 
+The dashboard uses `ScanRunsByStartedAtIndex`:
+
+```text
+dashboard_partition = "all" (partition key) + started_at (sort key, newest first)
+```
+
+Each new scan run writes the constant partition value. This intentionally
+supports a single deployment's recent-activity feed; historical records from
+before the index was introduced do not have this attribute and will appear
+only after a subsequent scan writes new records.
+
 ## Required IAM permissions
 
-The future scanner Lambda should have only:
+The scanner Lambdas have only:
 
 ```text
 dynamodb:PutItem       ScanRuns table
 dynamodb:UpdateItem    Findings and ScanRuns tables
 ```
 
-The API Lambda will need read/query permissions later, but it should not share
-the scanner role. Cleanup workers will use different, tightly scoped roles.
+The API Lambda has `GetItem` and `Query` permissions only for the findings and
+scan-runs tables and their indexes. It does not share a scanner role and it
+cannot delete EBS volumes. Cleanup workers use a separate, tightly scoped role.
 
-## Current limitation
+## Dashboard read contract
 
-The adapters exist but are not wired to deployed Lambda handlers yet. The next
-deployment/infrastructure milestone must create the two tables, inject table
-names into the scanner runtime, and grant the above permissions.
+The API exposes JWT-protected overview, findings, finding detail, and scan-run
+reads. The browser never receives DynamoDB permissions or table access.
+Approval and cleanup requests remain separate operator-only write operations.

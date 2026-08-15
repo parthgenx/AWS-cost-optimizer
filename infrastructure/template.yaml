@@ -82,9 +82,22 @@ Resources:
       AttributeDefinitions:
         - AttributeName: finding_id
           AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: last_detected_at
+          AttributeType: S
       KeySchema:
         - AttributeName: finding_id
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: FindingsByStatusLastDetectedAtIndex
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: last_detected_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -98,9 +111,22 @@ Resources:
       AttributeDefinitions:
         - AttributeName: scan_id
           AttributeType: S
+        - AttributeName: dashboard_partition
+          AttributeType: S
+        - AttributeName: started_at
+          AttributeType: S
       KeySchema:
         - AttributeName: scan_id
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: ScanRunsByStartedAtIndex
+          KeySchema:
+            - AttributeName: dashboard_partition
+              KeyType: HASH
+            - AttributeName: started_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -213,16 +239,22 @@ Resources:
           COST_OPTIMIZER_ENVIRONMENT: !Ref Environment
           COST_OPTIMIZER_SERVICE_NAME: cost-optimization-api
           COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
+          COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
           COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME: !Ref AuditEventsTable
           COST_OPTIMIZER_OPERATOR_IDENTITY_SOURCE: api_gateway_jwt
           COST_OPTIMIZER_REQUIRED_OPERATOR_GROUP: !Ref ApiOperatorsGroup
       Policies:
         - Statement:
-            - Sid: ReadFindingsForApprovalAndCleanupRequests
+            - Sid: ReadFindingsForDashboardAndWorkflowRequests
               Effect: Allow
               Action:
                 - dynamodb:GetItem
-              Resource: !GetAtt FindingsTable.Arn
+                - dynamodb:Query
+              Resource:
+                - !GetAtt FindingsTable.Arn
+                - !Sub "${FindingsTable.Arn}/index/*"
+                - !GetAtt ScanRunsTable.Arn
+                - !Sub "${ScanRunsTable.Arn}/index/*"
             - Sid: ApproveFindingsWithAuditTrail
               Effect: Allow
               Action:

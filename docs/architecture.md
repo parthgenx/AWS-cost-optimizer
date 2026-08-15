@@ -11,15 +11,17 @@ than changing the domain or API layers.
 
 ## Components
 
-- **FastAPI API Lambda:** exposes the current approval and cleanup-request
-  operations through API Gateway HTTP API. API Gateway verifies Cognito JWTs;
-  FastAPI enforces the operator group and records the verified subject.
+- **FastAPI API Lambda:** exposes dashboard reads plus approval and
+  cleanup-request operations through API Gateway HTTP API. API Gateway verifies
+  Cognito JWTs; FastAPI accepts authenticated users for read operations and
+  enforces the operator group for lifecycle-changing operations.
 - **Scanner Lambda:** EventBridge invokes scheduled scans. It uses boto3-backed
   discovery adapters, pure rule evaluation, and a cost-estimation service.
 - **Cleanup Lambda:** receives approved cleanup events, revalidates resources,
   and performs only supported, idempotent actions.
 - **DynamoDB:** system of record for findings, approvals, rule configuration,
-  scan executions, and business audit events.
+  scan executions, and business audit events. The browser never accesses these
+  tables directly.
 - **EventBridge:** schedules scans and carries internal workflow events.
 - **SNS:** emits operator notifications without coupling scanning to a delivery
   channel.

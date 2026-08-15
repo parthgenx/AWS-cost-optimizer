@@ -6,7 +6,14 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
-from cost_optimization.domain.findings import AuditEvent, Finding, ScanRun
+from cost_optimization.domain.findings import (
+    AuditEvent,
+    Finding,
+    FindingPage,
+    FindingSummary,
+    ScanRun,
+    ScanRunPage,
+)
 from cost_optimization.domain.models import (
     ApplicationLoadBalancer,
     EbsSnapshot,
@@ -14,10 +21,12 @@ from cost_optimization.domain.models import (
     Ec2Instance,
     ElasticIpAddress,
     FindingCandidate,
+    FindingSeverity,
     FindingStatus,
     MetricQuery,
     MetricWindow,
     RdsInstance,
+    ResourceType,
 )
 
 
@@ -84,6 +93,24 @@ class FindingLookup(Protocol):
         """Return a finding when it exists, otherwise return None."""
 
 
+class FindingReadRepository(FindingLookup, Protocol):
+    """Reads dashboard-facing finding views without leaking datastore details."""
+
+    def list_by_status(
+        self,
+        *,
+        status: FindingStatus,
+        resource_type: ResourceType | None,
+        severity: FindingSeverity | None,
+        limit: int,
+        cursor: str | None,
+    ) -> FindingPage:
+        """Return findings in a lifecycle state, ordered by most recent observation."""
+
+    def summarize_by_status(self, *, status: FindingStatus) -> FindingSummary:
+        """Return an exact, transparent aggregate for a lifecycle state."""
+
+
 class FindingApprovalRepository(Protocol):
     """Persists an approval and its audit record as one atomic operation."""
 
@@ -147,3 +174,10 @@ class ScanRunRepository(Protocol):
 
     def fail(self, scan_run: ScanRun, *, completed_at: datetime, failure_type: str) -> None:
         """Mark a running scan failed without persisting sensitive error details."""
+
+
+class ScanRunReadRepository(Protocol):
+    """Reads recent scanner executions for operations and dashboard views."""
+
+    def list_recent(self, *, limit: int, cursor: str | None) -> ScanRunPage:
+        """Return scan runs ordered from newest to oldest."""

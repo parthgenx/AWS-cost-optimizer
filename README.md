@@ -226,7 +226,9 @@ subject to the approval or cleanup-request service.
 This gives the audit trail a meaningful actor identity without putting JWT
 signature-verification code in the application. API Gateway validates token
 signature, issuer, audience, and expiry before a request reaches Lambda, then
-passes verified claims to the integration. [AWS API Gateway JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
+passes verified claims to the integration. Authenticated users can use the
+read-only dashboard APIs; FastAPI additionally requires operator group
+membership before approval or cleanup-request actions. [AWS API Gateway JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
 
 See [API authentication decision](docs/decisions/0002-api-authentication.md)
 for trade-offs and the safe operator-provisioning procedure.

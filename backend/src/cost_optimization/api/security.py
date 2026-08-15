@@ -9,8 +9,8 @@ from fastapi import HTTPException, Request, status
 from cost_optimization.config import Environment, OperatorIdentitySource, Settings
 
 
-class OperatorIdentityResolver:
-    """Extract the authenticated operator identity used by approval and cleanup audit events."""
+class AuthenticatedIdentityResolver:
+    """Extract the verified identity for any JWT-protected dashboard read operation."""
 
     def __init__(self, settings: Settings) -> None:
         if (
@@ -21,9 +21,10 @@ class OperatorIdentityResolver:
         self._settings = settings
 
     def resolve(self, request: Request) -> str:
-        """Return a verified subject, rejecting missing or unauthorized identities."""
+        """Return a verified subject, rejecting missing identities."""
         if self._settings.operator_identity_source is OperatorIdentitySource.API_GATEWAY_JWT:
-            return self._resolve_api_gateway_jwt_subject(request)
+            subject, _ = self._api_gateway_jwt_subject_and_claims(request)
+            return subject
         return self._resolve_trusted_header(request)
 
     def _resolve_trusted_header(self, request: Request) -> str:
@@ -35,7 +36,9 @@ class OperatorIdentityResolver:
             )
         return operator_id
 
-    def _resolve_api_gateway_jwt_subject(self, request: Request) -> str:
+    def _api_gateway_jwt_subject_and_claims(
+        self, request: Request
+    ) -> tuple[str, Mapping[str, object]]:
         claims = _api_gateway_jwt_claims(request)
         subject = claims.get("sub")
         if not isinstance(subject, str) or not subject:
@@ -43,6 +46,17 @@ class OperatorIdentityResolver:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Verified JWT subject is required",
             )
+        return subject, claims
+
+
+class OperatorIdentityResolver(AuthenticatedIdentityResolver):
+    """Require operator membership for approval and destructive-workflow requests."""
+
+    def resolve(self, request: Request) -> str:
+        """Return a verified operator subject, never trusting frontend role checks."""
+        if self._settings.operator_identity_source is not OperatorIdentitySource.API_GATEWAY_JWT:
+            return self._resolve_trusted_header(request)
+        subject, claims = self._api_gateway_jwt_subject_and_claims(request)
         if self._settings.required_operator_group not in _groups_from_claims(claims):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

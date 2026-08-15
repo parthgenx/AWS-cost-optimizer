@@ -188,6 +188,28 @@ class ScanRun(BaseModel):
         )
 
 
+class FindingPage(BaseModel):
+    """One cursor-paginated page of durable findings."""
+
+    items: list[Finding]
+    next_cursor: str | None = None
+
+
+class ScanRunPage(BaseModel):
+    """One cursor-paginated page of recent scan executions."""
+
+    items: list[ScanRun]
+    next_cursor: str | None = None
+
+
+class FindingSummary(BaseModel):
+    """A transparent aggregate of findings whose estimates are known by the rules."""
+
+    finding_count: int = Field(ge=0)
+    findings_with_known_savings_count: int = Field(ge=0)
+    known_monthly_savings_by_currency: dict[str, Money] = Field(default_factory=dict)
+
+
 def finding_id_for(candidate: FindingCandidate) -> str:
     """Return a stable ID for the rule/resource combination within one account/region."""
     identity = "|".join(

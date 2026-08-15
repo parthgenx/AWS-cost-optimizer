@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from cost_optimization.config import Environment, Settings
+from cost_optimization.config import Environment, OperatorIdentitySource, Settings
 
 
 def test_settings_normalize_log_level() -> None:
@@ -46,16 +46,21 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.parametrize(
-    ("deployment_environment", "expected_environment"),
+    ("deployment_environment", "expected_environment", "operator_identity_source"),
     [
-        ("dev", Environment.DEVELOPMENT),
-        ("prod", Environment.PRODUCTION),
+        ("dev", Environment.DEVELOPMENT, OperatorIdentitySource.TRUSTED_HEADER),
+        ("prod", Environment.PRODUCTION, OperatorIdentitySource.TRUSTED_HEADER),
     ],
 )
 def test_settings_normalize_deployment_environment_aliases(
-    deployment_environment: str, expected_environment: Environment
+    deployment_environment: str,
+    expected_environment: Environment,
+    operator_identity_source: OperatorIdentitySource,
 ) -> None:
-    settings = Settings(environment=deployment_environment)
+    settings = Settings(
+        environment=deployment_environment,
+        operator_identity_source=operator_identity_source,
+    )
 
     assert settings.environment is expected_environment
 

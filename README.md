@@ -7,8 +7,9 @@ A production-minded AWS cost-optimization platform that identifies avoidable clo
 > Current status: active development. Storage and public-IP detection, durable
 > finding records, scheduled scans, notifications, approval auditing, a
 > dry-run-first EBS cleanup worker, and CloudWatch-backed EC2, RDS, and
-> Application Load Balancer recommendations are implemented. Production API
-> authentication and operational hardening remain in progress.
+> Application Load Balancer recommendations and Cognito-protected API access
+> are implemented. Operational monitoring, CI/CD deployment automation, and
+> runbooks remain in progress.
 
 ## Problem
 
@@ -72,9 +73,10 @@ API / worker handlers → application services → domain → infrastructure ada
 - **Infrastructure:** contains boto3, DynamoDB, SNS, and EventBridge adapters.
 - **API/workers:** thin HTTP and Lambda entry points.
 
-The FastAPI application currently runs locally or in a trusted environment;
-API Gateway and Cognito deployment are intentionally deferred until the
-authentication boundary is implemented.
+The FastAPI application can run locally in trusted development mode, or as a
+Lambda behind API Gateway. The deployed API is protected by Cognito-issued JWTs
+and checks that the authenticated user belongs to the operator group before it
+can approve a finding or request cleanup.
 
 ## Implemented: unattached EBS volume detection
 
@@ -208,10 +210,26 @@ parameters below, so changing only one cannot enable deletion accidentally:
 CleanupDryRun=false CleanupExecutionEnabled=true
 ```
 
-The FastAPI approval endpoints are currently a local/trusted-operator
-interface. The `X-Operator-ID` header is not an authentication mechanism; a
-Cognito/API Gateway identity boundary is required before exposing this API on
-the internet.
+The local FastAPI application retains `X-Operator-ID` only for trusted
+development and test execution. In a deployed environment, API Gateway
+validates Cognito JWTs and FastAPI records the immutable JWT `sub` claim as the
+operator identity. A caller-controlled header is rejected in production.
+
+## Implemented: authenticated operational API
+
+The deployment template creates a Cognito user pool with administrator-created
+users only, an `cost-optimizer-operators` group, an API Gateway HTTP API JWT
+authorizer, and a small Lambda adapter for FastAPI. Every API route requires a
+valid JWT. FastAPI then confirms group membership before passing the verified
+subject to the approval or cleanup-request service.
+
+This gives the audit trail a meaningful actor identity without putting JWT
+signature-verification code in the application. API Gateway validates token
+signature, issuer, audience, and expiry before a request reaches Lambda, then
+passes verified claims to the integration. [AWS API Gateway JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
+
+See [API authentication decision](docs/decisions/0002-api-authentication.md)
+for trade-offs and the safe operator-provisioning procedure.
 
 ## Technology stack
 
@@ -319,7 +337,8 @@ SAM_CLI_TELEMETRY=0 sam build \
 
 Deploy the built package. The command creates the `aws-cost-optimizer-dev`
 CloudFormation stack, including six scanner Lambdas, an isolated cleanup Lambda,
-DynamoDB tables, EventBridge rules, and CloudWatch log groups. Cleanup remains
+a Cognito-protected FastAPI Lambda, DynamoDB tables, EventBridge rules,
+operational alarms/dashboard, and CloudWatch log groups. Cleanup remains
 dry-run-only by default.
 
 ```bash
@@ -337,6 +356,11 @@ SAM_CLI_TELEMETRY=0 sam deploy \
 bucket is not an application runtime service. SAM removes this application's
 artifacts during cleanup; an empty shared bucket does not incur S3 storage
 charges.
+
+The deployed API endpoint and Cognito IDs are CloudFormation outputs. The API
+is intentionally not anonymously accessible: create an administrator-provisioned
+Cognito user and add it to `cost-optimizer-operators` before making approval or
+cleanup-request calls. See the [API authentication decision](docs/decisions/0002-api-authentication.md).
 
 Scheduled scans are disabled by default. To enable the weekly EventBridge scans
 and subscribe an email recipient to finding notifications, add these parameter
@@ -444,6 +468,7 @@ CloudFormation recreates a fresh development environment from
 - Dry-run support for destructive workflows.
 - `cost-optimizer:exclude=true` prevents a resource from becoming a finding.
 - Separate least-privilege IAM roles for API, scanner, and cleanup workloads.
+- Cognito JWT validation at API Gateway; group-based operator authorization in FastAPI.
 - No long-lived AWS credentials in GitHub Actions; use OIDC deployment roles.
 
 ## Roadmap
@@ -453,13 +478,17 @@ CloudFormation recreates a fresh development environment from
 3. Add approval, audit, dry-run, and safe cleanup workflows.
 4. Add Elastic IP and EBS snapshot detection.
 5. Add CloudWatch-backed EC2, RDS, and load-balancer recommendations. ✅
-6. Add Cognito authorization, monitoring dashboards, runbooks, and sandbox end-to-end tests.
+6. Add Cognito authorization, monitoring dashboards, runbooks, and sandbox end-to-end tests. In progress: Cognito authorization is complete.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [Milestone plan](docs/milestones.md)
 - [Layered backend decision record](docs/decisions/0001-layered-backend.md)
+- [API authentication decision](docs/decisions/0002-api-authentication.md)
+- [Operations runbook](docs/operations.md)
+- [CI/CD and GitHub OIDC deployment](docs/ci-cd.md)
+- [Threat model](docs/threat-model.md)
 - [Unattached EBS volume rule](docs/rules/unattached-ebs-volumes.md)
 - [Utilization recommendation rules](docs/rules/utilization-recommendations.md)
 - [Deployment foundation](docs/deployment.md)

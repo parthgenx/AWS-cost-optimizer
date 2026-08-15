@@ -5,8 +5,10 @@
 The SAM template creates three on-demand DynamoDB tables, separate read-only
 scanner Lambdas for EBS volumes, Elastic IPs, EBS snapshots, EC2 utilization,
 RDS utilization, and Application Load Balancers, an isolated EBS cleanup
-Lambda, an SNS notification topic, EventBridge rules, and encrypted SQS
-dead-letter queues. It does not expose an API endpoint.
+Lambda, and an API Lambda. The API is exposed through API Gateway HTTP API and
+protected by a Cognito JWT authorizer. The stack also includes separate SNS
+topics for findings and operational alerts, EventBridge rules, encrypted SQS
+dead-letter queues, CloudWatch alarms, and an operational dashboard.
 
 ## Why AWS SAM
 
@@ -27,6 +29,11 @@ without adding an infrastructure framework that would obscure the project.
 5. It emits scan metrics through structured CloudWatch logs.
 6. If findings exist, it publishes a compact summary to SNS.
 7. It returns a small scan summary and writes structured logs to CloudWatch.
+
+The API Lambda is a separate path. API Gateway validates a Cognito JWT before
+the request reaches FastAPI. FastAPI verifies the required Cognito operator
+group in the API Gateway-provided claims, then records the JWT subject in the
+approval audit event or cleanup request.
 
 ## Scheduled scans and notifications
 
@@ -71,6 +78,10 @@ volume ARNs in the deployed account and region. It is dry-run by default and
 requires explicit deployment configuration before it can delete. No Lambda has
 permission to release IPs, alter RDS, or modify load balancers.
 
+The API Lambda can read one finding, atomically write an approval and audit
+event, and publish a cleanup request to the default EventBridge bus. It has no
+permission to delete an EBS volume or modify the resources being evaluated.
+
 ## Environment naming
 
 The SAM stack uses concise deployment labels (`dev`, `staging`, and `prod`) in
@@ -84,6 +95,7 @@ After AWS SAM CLI is installed, validate and build from the repository root:
 
 ```bash
 sam validate --template infrastructure/template.yaml
+sam validate --lint --template infrastructure/template.yaml
 sam build --template-file infrastructure/template.yaml
 ```
 
@@ -116,3 +128,8 @@ environment needs a separately reviewed retention and recovery decision.
 AWS can report charges after resources are removed because billing data is
 delayed. Once the script succeeds, however, this project's deployed resources
 no longer generate ongoing charges in the selected region.
+
+The separate GitHub OIDC bootstrap stack is intentionally outside this cleanup
+script because it contains account-level CI identity and artifact-bucket
+resources. See [CI/CD and GitHub OIDC deployment](ci-cd.md) for its independent
+retention and removal decision.

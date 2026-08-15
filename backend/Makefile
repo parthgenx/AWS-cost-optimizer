@@ -18,3 +18,6 @@ build-RdsUtilizationScannerFunction:
 
 build-ApplicationLoadBalancerScannerFunction:
 	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" .
+
+build-ApiFunction:
+	python3 -m pip install --upgrade --target "$(ARTIFACTS_DIR)" ".[api]"

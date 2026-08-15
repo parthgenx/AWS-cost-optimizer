@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: GitHub Actions OIDC deployment role and private SAM artifact bucket for AWS Cost Optimizer.
+
+Parameters:
+  GitHubOidcSubject:
+    Type: String
+    Default: repo:parthgenx/AWS-cost-optimizer:environment:development
+    Description: Exact GitHub OIDC sub claim allowed to deploy. Keep this restricted to the protected development environment.
+
+Resources:
+  GitHubActionsOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  DeploymentArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireDeploymentArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+
+  GitHubActionsDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aws-cost-optimizer-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubActionsOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Ref GitHubOidcSubject
+      Policies:
+        - PolicyName: DeployAwsCostOptimizerDevelopmentStack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageNamedApplicationStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListStackResources
+                  - cloudformation:UpdateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aws-cost-optimizer-dev/*"
+              - Sid: CreateInitialStackAndValidateTemplates
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ManageApplicationResources
+                Effect: Allow
+                Action:
+                  - apigateway:*
+                  - cloudwatch:*
+                  - cognito-idp:*
+                  - dynamodb:*
+                  - events:*
+                  - lambda:*
+                  - logs:*
+                  - sns:*
+                  - sqs:*
+                  - xray:*
+                Resource: "*"
+              - Sid: ManageApplicationExecutionRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-cost-optimizer-*"
+              - Sid: PackageDeploymentArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt DeploymentArtifactsBucket.Arn
+              - Sid: WriteDeploymentArtifacts
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${DeploymentArtifactsBucket.Arn}/aws-cost-optimizer/*"
+
+Outputs:
+  DeploymentRoleArn:
+    Description: Set as the AWS_DEPLOY_ROLE_ARN GitHub Actions variable.
+    Value: !GetAtt GitHubActionsDeploymentRole.Arn
+  DeploymentArtifactsBucketName:
+    Description: Set as the AWS_SAM_ARTIFACT_BUCKET GitHub Actions variable.
+    Value: !Ref DeploymentArtifactsBucket

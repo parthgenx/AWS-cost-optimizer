@@ -11,8 +11,9 @@ than changing the domain or API layers.
 
 ## Components
 
-- **FastAPI API Lambda:** exposes findings, rule management, scan requests, and
-  approval operations through API Gateway.
+- **FastAPI API Lambda:** exposes the current approval and cleanup-request
+  operations through API Gateway HTTP API. API Gateway verifies Cognito JWTs;
+  FastAPI enforces the operator group and records the verified subject.
 - **Scanner Lambda:** EventBridge invokes scheduled scans. It uses boto3-backed
   discovery adapters, pure rule evaluation, and a cost-estimation service.
 - **Cleanup Lambda:** receives approved cleanup events, revalidates resources,
@@ -23,6 +24,8 @@ than changing the domain or API layers.
 - **SNS:** emits operator notifications without coupling scanning to a delivery
   channel.
 - **CloudWatch:** collects JSON logs, metrics, dashboards, and alarms.
+- **Cognito:** holds administrator-provisioned operator identities and issues
+  short-lived JWTs for the API Gateway authorizer.
 
 ## Backend boundaries
 

@@ -306,9 +306,11 @@ npm run dev
 
 With valid public Cognito and API configuration, the dashboard provides an
 overview plus paginated findings, evidence, lifecycle context, and guarded
-operator workflows. Static hosting is added in a later frontend phase. With no
-`.env.local` values, the dashboard displays an intentional configuration-required
-screen instead of mock data.
+operator workflows. The deployment stack serves its built static assets through
+CloudFront from a private S3 origin; see [deployment documentation](docs/deployment.md)
+for the intentionally manual deployment workflow. With no `.env.local` values,
+the dashboard displays an intentional configuration-required screen instead of
+mock data.
 
 ### Run quality checks
 

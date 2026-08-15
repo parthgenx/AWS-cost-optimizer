@@ -175,13 +175,26 @@ Resources:
   ApiUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      ClientName: !Sub "aws-cost-optimizer-api-${Environment}"
+      ClientName: !Sub "aws-cost-optimizer-dashboard-${Environment}"
       UserPoolId: !Ref ApiUserPool
       GenerateSecret: false
       EnableTokenRevocation: true
       PreventUserExistenceErrors: ENABLED
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+      CallbackURLs:
+        - !Sub "https://${DashboardDistribution.DomainName}/auth/callback"
+        - http://localhost:5173/auth/callback
+      LogoutURLs:
+        - !Sub "https://${DashboardDistribution.DomainName}/"
+        - http://localhost:5173/
+      SupportedIdentityProviders:
+        - COGNITO
       ExplicitAuthFlows:
-        - ALLOW_ADMIN_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
       AccessTokenValidity: 60
       IdTokenValidity: 60
@@ -189,12 +202,148 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
 
+  ApiUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "aws-cost-optimizer-${Environment}-${AWS::AccountId}"
+      UserPoolId: !Ref ApiUserPool
+
   ApiOperatorsGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
       GroupName: cost-optimizer-operators
       Description: Operators allowed to approve findings and request EBS cleanup.
       UserPoolId: !Ref ApiUserPool
+
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "aws-cost-optimizer-dashboard-${Environment}-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  DashboardOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Description: !Sub "Signed CloudFront access for the ${Environment} dashboard bucket."
+        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  DashboardCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Comment: Cache static dashboard assets without forwarding viewer data to S3.
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 0
+        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  DashboardResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !Sub >-
+              default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none';
+              script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'
+              https://*.execute-api.${AWS::Region}.${AWS::URLSuffix}
+              https://${ApiUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com;
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+            Preload: false
+
+  DashboardDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Self-hosted dashboard for aws-cost-optimizer ${Environment}."
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 0
+            ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCachingMinTTL: 0
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: !Ref DashboardCachePolicy
+          Compress: true
+          ResponseHeadersPolicyId: !Ref DashboardResponseHeadersPolicy
+          TargetOriginId: DashboardS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+          - DomainName: !GetAtt DashboardBucket.RegionalDomainName
+            Id: DashboardS3Origin
+            OriginAccessControlId: !GetAtt DashboardOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontReadOnlyAccess
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${DashboardBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DashboardDistribution}"
 
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
@@ -206,6 +355,24 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: "$default"
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: AWS Cost Optimizer API
+          version: "1.0"
+        paths: {}
+      CorsConfiguration:
+        AllowHeaders:
+          - authorization
+          - content-type
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowOrigins:
+          - !Sub "https://${DashboardDistribution.DomainName}"
+          - http://localhost:5173
+        MaxAge: 600
       AccessLogSettings:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
         Format: >-
@@ -1165,6 +1332,15 @@ Resources:
       SourceArn: !GetAtt ScheduledUtilizationScanRule.Arn
 
 Outputs:
+  DashboardUrl:
+    Description: HTTPS URL for the self-hosted operator dashboard.
+    Value: !Sub "https://${DashboardDistribution.DomainName}"
+  DashboardDistributionId:
+    Description: CloudFront distribution ID used to invalidate dashboard assets after deployment.
+    Value: !Ref DashboardDistribution
+  DashboardBucketName:
+    Description: Private S3 bucket containing the built dashboard assets.
+    Value: !Ref DashboardBucket
   OperationalDashboardName:
     Description: CloudWatch dashboard for scanner, workflow, queue, and API health.
     Value: !Ref OperationalDashboard
@@ -1177,6 +1353,15 @@ Outputs:
   ApiUserPoolId:
     Description: Cognito user pool containing approved API operators.
     Value: !Ref ApiUserPool
+  CognitoIssuer:
+    Description: Public Cognito issuer URL used by the dashboard OIDC client.
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${ApiUserPool}"
+  CognitoDomain:
+    Description: Cognito managed-login domain used by the dashboard OIDC client.
+    Value: !Sub "https://${ApiUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+  DashboardCognitoClientId:
+    Description: Public Cognito app-client ID used by the dashboard OIDC client.
+    Value: !Ref ApiUserPoolClient
   ApiUserPoolClientId:
     Description: Cognito app-client ID used as the API Gateway JWT audience.
     Value: !Ref ApiUserPoolClient

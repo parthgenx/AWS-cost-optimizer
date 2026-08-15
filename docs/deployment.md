@@ -8,7 +8,57 @@ RDS utilization, and Application Load Balancers, an isolated EBS cleanup
 Lambda, and an API Lambda. The API is exposed through API Gateway HTTP API and
 protected by a Cognito JWT authorizer. The stack also includes separate SNS
 topics for findings and operational alerts, EventBridge rules, encrypted SQS
-dead-letter queues, CloudWatch alarms, and an operational dashboard.
+dead-letter queues, CloudWatch alarms, an operational dashboard, and the
+self-hosted React dashboard delivery layer.
+
+## Hosted dashboard
+
+The frontend is built outside the Lambda package and deployed as static assets
+to a private, application-owned S3 bucket. CloudFront is the only public
+viewer endpoint. Its Origin Access Control signs requests to S3; the bucket
+policy permits `s3:GetObject` only from that exact distribution. S3 public
+access blocks remain enabled and the bucket has no static-website endpoint.
+
+CloudFront uses its default HTTPS certificate and redirects HTTP to HTTPS. A
+custom error mapping returns `index.html` for S3 403 and 404 responses, so
+direct navigation and refreshes on routes such as `/findings/<finding-id>` are
+handled by the React router. A response-headers policy adds a restrictive CSP,
+HSTS, frame denial, MIME sniffing protection, and a referrer policy.
+
+No custom domain, Route 53 zone, or multi-account access layer is created. The
+CloudFront URL is the normal recruiter-facing dashboard URL for one deployment
+in one AWS account.
+
+### Cognito browser application
+
+The existing Cognito app client is configured as a public browser client with
+Authorization Code + PKCE, `openid` and `email` scopes, and no client secret.
+A Cognito managed-login domain is created by the stack. Public user signup is
+still disabled at the user-pool level: administrators create users, then add
+operators to `cost-optimizer-operators`.
+
+The app client allows these exact return locations:
+
+- `https://<CloudFront-domain>/auth/callback` after sign-in.
+- `https://<CloudFront-domain>/` after sign-out.
+- The equivalent `http://localhost:5173` routes for deliberate local UI work.
+
+The browser receives tokens through the existing frontend OIDC client and sends
+the access token to API Gateway. Callback URLs do not grant any AWS permission;
+API Gateway JWT validation and FastAPI operator-group checks remain the source
+of access control.
+
+### CORS boundary
+
+API Gateway owns CORS, rather than FastAPI. It allows only these origins:
+
+- The exact CloudFront distribution HTTPS origin created by this stack.
+- `http://localhost:5173` for local development.
+
+It allows only `GET`, `POST`, and `OPTIONS`, with `authorization` and
+`content-type` request headers. It does not enable credentialed cookies or a
+wildcard origin. API Gateway responds to browser preflight requests before the
+FastAPI Lambda is invoked.
 
 ## Why AWS SAM
 
@@ -82,6 +132,12 @@ The API Lambda can read one finding, atomically write an approval and audit
 event, and publish a cleanup request to the default EventBridge bus. It has no
 permission to delete an EBS volume or modify the resources being evaluated.
 
+The GitHub deployment role receives write access only to the deterministic
+development dashboard bucket and can create CloudFront resources through the
+reviewed development stack. It does not grant the API Lambda any new IAM
+permission. The S3 bucket policy grants runtime reads to CloudFront, not to
+public S3 clients.
+
 ## Environment naming
 
 The SAM stack uses concise deployment labels (`dev`, `staging`, and `prod`) in
@@ -101,6 +157,27 @@ sam build --template-file infrastructure/template.yaml
 
 Deployment is deliberately deferred until the infrastructure is reviewed.
 
+## Deployment outputs and frontend publishing
+
+After deployment, the stack exposes the following public configuration values:
+
+| Output | Purpose |
+|---|---|
+| `DashboardUrl` | HTTPS CloudFront URL for the dashboard. |
+| `DashboardBucketName` | Private S3 origin used only by deployment and cleanup. |
+| `DashboardDistributionId` | CloudFront distribution invalidated after publishing assets. |
+| `ApiEndpoint` | API Gateway base URL compiled into the frontend. |
+| `CognitoIssuer` | OIDC issuer URL compiled into the frontend. |
+| `CognitoDomain` | Cognito managed-login URL compiled into the frontend. |
+| `DashboardCognitoClientId` | Public browser client ID compiled into the frontend. |
+
+The manually-dispatched GitHub workflow deploys infrastructure first, reads
+those outputs, then runs `npm ci` and `npm run build` with the four `VITE_*`
+configuration values. It uploads hashed assets with a long immutable cache
+period, uploads `index.html` with `no-store`, and creates a CloudFront `/*`
+invalidation. No environment file, AWS credential, Cognito password, or token
+is committed to the repository.
+
 ## Cleaning up the development environment
 
 The project includes a deliberately narrow cleanup command:
@@ -110,11 +187,13 @@ The project includes a deliberately narrow cleanup command:
 ```
 
 It only targets the `aws-cost-optimizer-dev` stack. After a `DELETE`
-confirmation, `sam delete` removes the CloudFormation resources and the
-deployment artifacts associated with that application. The script leaves an
-empty shared SAM artifact bucket alone because it may be used by another SAM
-project; an empty S3 bucket has no storage charge. It verifies that the stack
-no longer exists before reporting success.
+confirmation, it reads the private `DashboardBucketName` from that exact stack
+and removes its non-versioned static assets. It then runs `sam delete`, which
+removes the bucket, bucket policy, CloudFront distribution, Cognito managed-login
+domain, API, Lambdas, tables, and other application resources. The script
+leaves an empty shared SAM artifact bucket alone because it may be used by
+another SAM project; an empty S3 bucket has no storage charge. It verifies that
+the stack no longer exists before reporting success.
 
 For automation, such as a temporary sandbox environment, use:
 

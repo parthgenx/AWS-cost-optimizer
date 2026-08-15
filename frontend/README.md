@@ -31,9 +31,11 @@ The Cognito Hosted Login callback is always:
 http://localhost:5173/auth/callback
 ```
 
-The future hosting phase will add the deployed CloudFront callback URL to the
-Cognito app client. Until then, leaving the values unset intentionally shows a
-configuration-required screen rather than a misleading mock dashboard.
+The SAM stack registers both the deployed CloudFront callback URL and the local
+development URL with the Cognito app client. GitHub Actions reads the deployed
+stack outputs and supplies the hosted values at build time. Leaving values unset
+locally intentionally shows a configuration-required screen rather than a
+misleading mock dashboard.
 
 ## Authentication and API boundary
 
@@ -47,6 +49,19 @@ adjust its interface based on Cognito group claims, but FastAPI remains
 authoritative for all authorization decisions. In particular, the
 `cost-optimizer-operators` group is required by the backend for approval and
 cleanup-request calls.
+
+## Hosting
+
+The frontend is published to a private S3 bucket through the deployment
+workflow. CloudFront is the sole HTTPS viewer endpoint and uses Origin Access
+Control to read the bucket; direct S3 public access is blocked. CloudFront
+returns `index.html` for missing object paths so direct detail URLs work with
+the React router.
+
+The API Gateway CORS policy allows the exact CloudFront origin and
+`http://localhost:5173` for local development. It allows `GET`, `POST`, and
+`OPTIONS` with `authorization` and `content-type`; no wildcard origin or cookie
+credentials are used.
 
 ## Findings workflow
 

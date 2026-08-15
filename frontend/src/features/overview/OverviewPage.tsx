@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { ApiError, createApiClient } from '../../api/client'
 import type { DashboardOverview, ScanRun } from '../../api/types'
@@ -122,11 +123,11 @@ export function OverviewContent({ data, error, isLoading, onRetry }: OverviewCon
             <p className="eyebrow">Review queue ready</p>
             <h2>{openFindingCount} finding(s) need human review.</h2>
             <p>
-              The next phase adds the findings list and evidence detail screens. No resource is
-              changed by this dashboard view.
+              Review evidence, lifecycle status, and scanner context before deciding whether an
+              operator should take action.
             </p>
           </div>
-          <span className="coming-soon-pill">Findings next</span>
+          <Link className="secondary-button" to="/findings">Review findings</Link>
         </section>
       )}
 

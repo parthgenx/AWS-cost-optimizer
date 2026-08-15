@@ -7,10 +7,10 @@ permissions.
 
 ## Current scope
 
-Phase 2 implements the protected application shell, Cognito login/logout,
-authenticated FastAPI client, and read-only Overview page. Approval, cleanup
-requests, findings navigation, and static-site hosting are intentionally later
-phases.
+Phase 3 adds server-paginated findings, supported lifecycle/resource/severity
+filters, evidence and lifecycle detail, and confirmation-gated operator actions.
+Only approved unattached EBS volume findings can request cleanup. Static-site
+hosting remains a later phase.
 
 ## Local configuration
 
@@ -43,8 +43,24 @@ exchanges the code for tokens and keeps the session in `sessionStorage`.
 
 The API client sends only the Cognito access token as a Bearer token to API
 Gateway. API Gateway validates the JWT before FastAPI runs. Browser code may
-adjust its interface based on session state, but FastAPI remains authoritative
-for all authorization decisions.
+adjust its interface based on Cognito group claims, but FastAPI remains
+authoritative for all authorization decisions. In particular, the
+`cost-optimizer-operators` group is required by the backend for approval and
+cleanup-request calls.
+
+## Findings workflow
+
+The findings page uses the existing authenticated read APIs. Status is a
+server-side lifecycle filter; resource and severity are optional additional
+filters. Pagination uses API-provided opaque cursors and never exposes DynamoDB
+keys to the browser.
+
+On a finding detail page, an operator can approve an `open` finding. Approval
+creates an audit record but does not delete anything. For an `approved`
+unattached EBS volume, an operator can then submit a separate cleanup request.
+That request travels through EventBridge to the isolated cleanup Lambda, which
+revalidates the volume. The browser cannot override dry-run or cleanup-execution
+settings, and non-EBS resource types have no cleanup action.
 
 ## Quality commands
 

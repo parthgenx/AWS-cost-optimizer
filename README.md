@@ -304,9 +304,11 @@ cp .env.example .env.local
 npm run dev
 ```
 
-The Cognito Hosted Login configuration and static hosting are added in later
-frontend phases. With no `.env.local` values, the dashboard displays an
-intentional configuration-required screen instead of mock data.
+With valid public Cognito and API configuration, the dashboard provides an
+overview plus paginated findings, evidence, lifecycle context, and guarded
+operator workflows. Static hosting is added in a later frontend phase. With no
+`.env.local` values, the dashboard displays an intentional configuration-required
+screen instead of mock data.
 
 ### Run quality checks
 

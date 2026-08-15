@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { Activity, BellRing, CloudCog, LayoutDashboard, LogOut, ShieldCheck } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
 
 interface AppShellProps {
   children: ReactNode
@@ -25,17 +26,17 @@ export function AppShell({ children, email, onSignOut }: AppShellProps) {
         </div>
 
         <nav aria-label="Primary navigation" className="navigation">
-          <a aria-current="page" className="nav-item nav-item-active" href="/">
+          <NavLink className={({ isActive }) => `nav-item${isActive ? ' nav-item-active' : ''}`} end to="/">
             <LayoutDashboard aria-hidden="true" size={18} />
             Overview
-          </a>
-          <span className="nav-item nav-item-disabled">
+          </NavLink>
+          <NavLink className={({ isActive }) => `nav-item${isActive ? ' nav-item-active' : ''}`} to="/findings">
             <CloudCog aria-hidden="true" size={18} />
-            Findings <em>Next</em>
-          </span>
+            Findings
+          </NavLink>
           <span className="nav-item nav-item-disabled">
             <Activity aria-hidden="true" size={18} />
-            Activity <em>Next</em>
+            Activity <em>Overview</em>
           </span>
         </nav>
 

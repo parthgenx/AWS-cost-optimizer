@@ -236,6 +236,7 @@ for trade-offs and the safe operator-provisioning procedure.
 ## Technology stack
 
 - Python 3.13+
+- React and TypeScript
 - FastAPI
 - boto3
 - AWS Lambda
@@ -262,6 +263,7 @@ for trade-offs and the safe operator-provisioning procedure.
 │   ├── tests/
 │   ├── pyproject.toml
 │   └── Dockerfile
+├── frontend/                    # React dashboard and Cognito OIDC client
 ├── docs/
 ├── .github/workflows/
 ├── docker-compose.yml
@@ -288,6 +290,23 @@ Health endpoint:
 ```text
 http://localhost:8000/health
 ```
+
+### Dashboard foundation
+
+The React dashboard is intentionally a separate static application. It uses
+Cognito Authorization Code + PKCE and the JWT-protected FastAPI read APIs; it
+does not receive AWS credentials or access DynamoDB directly.
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+The Cognito Hosted Login configuration and static hosting are added in later
+frontend phases. With no `.env.local` values, the dashboard displays an
+intentional configuration-required screen instead of mock data.
 
 ### Run quality checks
 

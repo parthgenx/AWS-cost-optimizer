@@ -226,7 +226,9 @@ subject to the approval or cleanup-request service.
 This gives the audit trail a meaningful actor identity without putting JWT
 signature-verification code in the application. API Gateway validates token
 signature, issuer, audience, and expiry before a request reaches Lambda, then
-passes verified claims to the integration. [AWS API Gateway JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
+passes verified claims to the integration. Authenticated users can use the
+read-only dashboard APIs; FastAPI additionally requires operator group
+membership before approval or cleanup-request actions. [AWS API Gateway JWT authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html)
 
 See [API authentication decision](docs/decisions/0002-api-authentication.md)
 for trade-offs and the safe operator-provisioning procedure.
@@ -234,6 +236,7 @@ for trade-offs and the safe operator-provisioning procedure.
 ## Technology stack
 
 - Python 3.13+
+- React and TypeScript
 - FastAPI
 - boto3
 - AWS Lambda
@@ -260,6 +263,7 @@ for trade-offs and the safe operator-provisioning procedure.
 │   ├── tests/
 │   ├── pyproject.toml
 │   └── Dockerfile
+├── frontend/                    # React dashboard and Cognito OIDC client
 ├── docs/
 ├── .github/workflows/
 ├── docker-compose.yml
@@ -286,6 +290,27 @@ Health endpoint:
 ```text
 http://localhost:8000/health
 ```
+
+### Dashboard foundation
+
+The React dashboard is intentionally a separate static application. It uses
+Cognito Authorization Code + PKCE and the JWT-protected FastAPI read APIs; it
+does not receive AWS credentials or access DynamoDB directly.
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+With valid public Cognito and API configuration, the dashboard provides an
+overview plus paginated findings, evidence, lifecycle context, and guarded
+operator workflows. The deployment stack serves its built static assets through
+CloudFront from a private S3 origin; see [deployment documentation](docs/deployment.md)
+for the intentionally manual deployment workflow. With no `.env.local` values,
+the dashboard displays an intentional configuration-required screen instead of
+mock data.
 
 ### Run quality checks
 

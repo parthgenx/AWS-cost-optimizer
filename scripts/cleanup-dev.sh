@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deletes the development deployment and its SAM-managed artifacts.
+# Deletes the development deployment, hosted dashboard assets, and SAM-managed artifacts.
 #
 # This script intentionally targets only the development stack. Production
 # teardown should remain an explicit, separately reviewed operation.
@@ -16,8 +16,9 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/cleanup-dev.sh [--region REGION] [--yes]
 
-Deletes the aws-cost-optimizer-dev SAM application and the deployment
-artifacts created for it. The script never targets staging or production.
+Deletes the aws-cost-optimizer-dev SAM application, its private hosted-dashboard
+assets, and the deployment artifacts created for it. The script never targets
+staging or production.
 
 Options:
   --region REGION  AWS region containing the development stack.
@@ -71,7 +72,7 @@ fi
 
 echo "AWS account: $account_id"
 echo "Region: $region"
-echo "This permanently deletes the '$STACK_NAME' development stack and its SAM artifacts."
+echo "This permanently deletes the '$STACK_NAME' development stack, hosted dashboard assets, and SAM artifacts."
 
 if [[ "$skip_confirmation" != true ]]; then
   read -r -p "Type DELETE to continue: " confirmation
@@ -79,6 +80,20 @@ if [[ "$skip_confirmation" != true ]]; then
     echo "Cleanup cancelled."
     exit 0
   fi
+fi
+
+# CloudFormation cannot delete a non-empty S3 bucket. The dashboard bucket is
+# an application-owned, non-versioned bucket whose exact name is read from this
+# development stack, never guessed or supplied by the caller.
+dashboard_bucket_name="$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --region "$region" \
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardBucketName'].OutputValue | [0]" \
+  --output text)"
+
+if [[ -n "$dashboard_bucket_name" && "$dashboard_bucket_name" != "None" ]]; then
+  echo "Deleting hosted dashboard assets from '$dashboard_bucket_name'."
+  aws s3 rm "s3://$dashboard_bucket_name" --recursive --region "$region"
 fi
 
 # sam delete removes the CloudFormation stack and the deployment artifacts
@@ -96,4 +111,4 @@ if aws cloudformation describe-stacks \
 fi
 
 echo "Verified: the development deployment is deleted."
-echo "No AWS resources managed by this project remain in '$region'."
+echo "No deployed dashboard or other AWS resources managed by this project remain in '$region'."

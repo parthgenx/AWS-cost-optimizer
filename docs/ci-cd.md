@@ -2,9 +2,10 @@
 
 ## Design
 
-Pull requests run formatting, linting, static typing, tests, and SAM template
-linting. Deployment is deliberately separate and manual through GitHub Actions
-`workflow_dispatch`; a code push never creates AWS resources automatically.
+Pull requests run backend formatting, linting, static typing, tests, SAM
+template linting, and frontend build/type, test, and lint checks. Deployment is
+deliberately separate and manual through GitHub Actions `workflow_dispatch`; a
+code push never creates AWS resources automatically.
 
 The deployment workflow requests a short-lived GitHub OIDC token, then assumes
 an AWS IAM role. It does not use `AWS_ACCESS_KEY_ID` or any other long-lived
@@ -19,9 +20,12 @@ repository and deployment context. [GitHub OIDC on AWS](https://docs.github.com/
 
 `infrastructure/github-oidc-bootstrap.yaml` is intentionally separate from the
 application stack. It creates the GitHub OIDC provider, a narrowly purposed
-deployment role, and a private encrypted artifact bucket. The bucket is
-retained if the bootstrap stack is deleted, because deployment artifacts are an
-account-level concern and may need an independent retention decision.
+deployment role, and a private encrypted artifact bucket. The deployment role
+can manage the named development dashboard S3 bucket and CloudFront resources
+through the application stack, then upload only that dashboard's assets and
+invalidate its distribution. The artifact bucket is retained if the bootstrap
+stack is deleted, because deployment artifacts are an account-level concern and
+may need an independent retention decision.
 
 Before running it, create a GitHub environment named `development` in the
 repository settings and configure protection rules that allow deployments only
@@ -31,8 +35,11 @@ from `main`. The IAM trust policy uses this exact OIDC subject:
 repo:parthgenx/AWS-cost-optimizer:environment:development
 ```
 
-Deploy the bootstrap stack only after reviewing it. This requires an AWS
-administrator once; it is not performed by the application workflow.
+Deploy or update the bootstrap stack only after reviewing it. This requires an
+AWS administrator once; it is not performed by the application workflow. If the
+bootstrap stack already exists from an earlier milestone, rerun this command to
+grant the reviewed dashboard publishing permissions before the first hosted
+frontend deployment.
 
 ```bash
 aws cloudformation deploy \
@@ -74,6 +81,19 @@ CleanupExecutionEnabled=false
 This means the CI/CD path cannot accidentally enable recurring scans or real
 EBS deletion. Any future production deployment should use a separately reviewed
 workflow, role, environment, and stack—not a modified development command.
+
+The workflow performs these ordered steps:
+
+1. Validates, container-builds, and deploys the SAM stack.
+2. Reads the deployed API, Cognito, private dashboard-bucket, and CloudFront
+   outputs from CloudFormation.
+3. Builds the React app with those public `VITE_*` values.
+4. Publishes the generated assets to the private origin bucket, with long cache
+   headers for hashed files and no-store for `index.html`.
+5. Requests a CloudFront `/*` invalidation and prints the HTTPS dashboard URL.
+
+The runtime browser never uses the deployment role or artifact bucket. It is a
+separate Cognito-authenticated client of API Gateway.
 
 ## Trade-offs
 

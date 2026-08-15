@@ -6,23 +6,35 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from starlette.middleware.base import RequestResponseEndpoint
 
 from cost_optimization.api.schemas import (
     CleanupRequestResponse,
+    DashboardOverviewResponse,
     FindingApprovalResponse,
+    FindingListResponse,
+    FindingResponse,
     HealthResponse,
+    ScanRunListResponse,
 )
-from cost_optimization.api.security import OperatorIdentityResolver
+from cost_optimization.api.security import AuthenticatedIdentityResolver, OperatorIdentityResolver
 from cost_optimization.application.services.approve_finding import (
     ApproveFinding,
     FindingNotFoundError,
 )
+from cost_optimization.application.services.read_dashboard import (
+    DashboardReadService,
+)
+from cost_optimization.application.services.read_dashboard import (
+    FindingNotFoundError as DashboardFindingNotFoundError,
+)
 from cost_optimization.application.services.request_cleanup import RequestCleanup
 from cost_optimization.config import Settings, get_settings
+from cost_optimization.domain.models import FindingSeverity, FindingStatus, ResourceType
 from cost_optimization.infrastructure.aws.eventbridge_cleanup_requests import (
     EventBridgeCleanupRequestPublisher,
     create_eventbridge_client,
@@ -30,6 +42,7 @@ from cost_optimization.infrastructure.aws.eventbridge_cleanup_requests import (
 from cost_optimization.infrastructure.persistence.dynamodb import (
     DynamoDbFindingApprovalRepository,
     DynamoDbFindingRepository,
+    DynamoDbScanRunRepository,
     get_dynamodb_client,
     get_dynamodb_table,
 )
@@ -44,6 +57,8 @@ def create_app(
     *,
     approval_service: ApproveFinding | None = None,
     cleanup_request_service: RequestCleanup | None = None,
+    dashboard_read_service: DashboardReadService | None = None,
+    authenticated_identity_resolver: AuthenticatedIdentityResolver | None = None,
     operator_identity_resolver: OperatorIdentityResolver | None = None,
 ) -> FastAPI:
     """Create the HTTP application with explicitly supplied or env settings."""
@@ -67,6 +82,12 @@ def create_app(
     )
     app.state.cleanup_request_service = (
         cleanup_request_service or _cleanup_request_service_from_settings(application_settings)
+    )
+    app.state.dashboard_read_service = (
+        dashboard_read_service or _dashboard_read_service_from_settings(application_settings)
+    )
+    app.state.authenticated_identity_resolver = (
+        authenticated_identity_resolver or AuthenticatedIdentityResolver(application_settings)
     )
     app.state.operator_identity_resolver = operator_identity_resolver or OperatorIdentityResolver(
         application_settings
@@ -93,6 +114,91 @@ def create_app(
             environment=application_settings.environment,
             version=application_settings.version,
         )
+
+    @app.get(
+        "/dashboard/overview",
+        response_model=DashboardOverviewResponse,
+        tags=["Dashboard"],
+    )
+    async def dashboard_overview(request: Request) -> DashboardOverviewResponse:
+        """Return a JWT-protected dashboard overview without exposing DynamoDB to browsers."""
+        app.state.authenticated_identity_resolver.resolve(request)
+        service = app.state.dashboard_read_service
+        if service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Dashboard read persistence is not configured",
+            )
+        return DashboardOverviewResponse.from_domain(service.get_overview())
+
+    @app.get("/findings", response_model=FindingListResponse, tags=["Findings"])
+    async def list_findings(
+        request: Request,
+        finding_status: Annotated[FindingStatus, Query(alias="status")] = FindingStatus.OPEN,
+        resource_type: ResourceType | None = None,
+        severity: FindingSeverity | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=2048)] = None,
+    ) -> FindingListResponse:
+        """Return a filtered finding page for an authenticated dashboard user."""
+        app.state.authenticated_identity_resolver.resolve(request)
+        service = app.state.dashboard_read_service
+        if service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Dashboard read persistence is not configured",
+            )
+        try:
+            page = service.list_findings(
+                status=finding_status,
+                resource_type=resource_type,
+                severity=severity,
+                limit=limit,
+                cursor=cursor,
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+            ) from error
+        return FindingListResponse.from_domain(page)
+
+    @app.get("/findings/{finding_id}", response_model=FindingResponse, tags=["Findings"])
+    async def get_finding(finding_id: str, request: Request) -> FindingResponse:
+        """Return one finding's detail and evidence for an authenticated dashboard user."""
+        app.state.authenticated_identity_resolver.resolve(request)
+        service = app.state.dashboard_read_service
+        if service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Dashboard read persistence is not configured",
+            )
+        try:
+            finding = service.get_finding(finding_id)
+        except DashboardFindingNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        return FindingResponse.from_domain(finding)
+
+    @app.get("/scan-runs", response_model=ScanRunListResponse, tags=["Dashboard"])
+    async def list_scan_runs(
+        request: Request,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        cursor: Annotated[str | None, Query(min_length=1, max_length=2048)] = None,
+    ) -> ScanRunListResponse:
+        """Return recent scanner activity for an authenticated dashboard user."""
+        app.state.authenticated_identity_resolver.resolve(request)
+        service = app.state.dashboard_read_service
+        if service is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Dashboard read persistence is not configured",
+            )
+        try:
+            page = service.list_scan_runs(limit=limit, cursor=cursor)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+            ) from error
+        return ScanRunListResponse.from_domain(page)
 
     @app.post(
         "/findings/{finding_id}/approval",
@@ -177,6 +283,16 @@ def _cleanup_request_service_from_settings(settings: Settings) -> RequestCleanup
     return RequestCleanup(
         DynamoDbFindingRepository(get_dynamodb_table(settings.findings_table_name)),
         EventBridgeCleanupRequestPublisher(create_eventbridge_client(settings.aws_region)),
+    )
+
+
+def _dashboard_read_service_from_settings(settings: Settings) -> DashboardReadService | None:
+    """Wire dashboard reads only when both read tables are explicitly configured."""
+    if not settings.findings_table_name or not settings.scan_runs_table_name:
+        return None
+    return DashboardReadService(
+        findings=DynamoDbFindingRepository(get_dynamodb_table(settings.findings_table_name)),
+        scan_runs=DynamoDbScanRunRepository(get_dynamodb_table(settings.scan_runs_table_name)),
     )
 
 

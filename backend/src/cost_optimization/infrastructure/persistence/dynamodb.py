@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import base64
+import binascii
+import json
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol, cast
@@ -13,7 +16,10 @@ from cost_optimization.domain.findings import (
     AuditEvent,
     Finding,
     FindingApproval,
+    FindingPage,
+    FindingSummary,
     ScanRun,
+    ScanRunPage,
     finding_id_for,
 )
 from cost_optimization.domain.models import (
@@ -24,6 +30,10 @@ from cost_optimization.domain.models import (
     ResourceReference,
     ResourceType,
 )
+
+FINDINGS_BY_STATUS_LAST_DETECTED_AT_INDEX = "FindingsByStatusLastDetectedAtIndex"
+SCAN_RUNS_BY_STARTED_AT_INDEX = "ScanRunsByStartedAtIndex"
+DASHBOARD_SCAN_RUN_PARTITION = "all"
 
 
 class DynamoDbTable(Protocol):
@@ -37,6 +47,9 @@ class DynamoDbTable(Protocol):
 
     def get_item(self, **kwargs: object) -> Mapping[str, object]:
         """Read a single item by primary key."""
+
+    def query(self, **kwargs: object) -> Mapping[str, object]:
+        """Query a table or secondary index."""
 
 
 class DynamoDbClient(Protocol):
@@ -96,6 +109,100 @@ class DynamoDbFindingRepository:
         if not isinstance(item, Mapping):
             raise ValueError("DynamoDB finding response Item must be a map")
         return _finding_from_item(item)
+
+    def list_by_status(
+        self,
+        *,
+        status: FindingStatus,
+        resource_type: ResourceType | None,
+        severity: FindingSeverity | None,
+        limit: int,
+        cursor: str | None,
+    ) -> FindingPage:
+        """Query lifecycle findings by the dashboard's primary access pattern."""
+        names = {"#status": "status"}
+        values: dict[str, object] = {":status": status.value}
+        filters: list[str] = []
+        if resource_type is not None:
+            names["#resource_type"] = "resource_type"
+            values[":resource_type"] = resource_type.value
+            filters.append("#resource_type = :resource_type")
+        if severity is not None:
+            names["#severity"] = "severity"
+            values[":severity"] = severity.value
+            filters.append("#severity = :severity")
+
+        request: dict[str, object] = {
+            "IndexName": FINDINGS_BY_STATUS_LAST_DETECTED_AT_INDEX,
+            "KeyConditionExpression": "#status = :status",
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": values,
+            "Limit": limit,
+            "ScanIndexForward": False,
+        }
+        if filters:
+            request["FilterExpression"] = " AND ".join(filters)
+        if cursor is not None:
+            request["ExclusiveStartKey"] = _decode_cursor(
+                cursor,
+                expected_keys={"finding_id", "status", "last_detected_at"},
+            )
+
+        response = self._table.query(**request)
+        items = _response_items(response, entity_name="finding")
+        return FindingPage(
+            items=[_finding_from_item(item) for item in items],
+            next_cursor=_next_cursor(response),
+        )
+
+    def summarize_by_status(self, *, status: FindingStatus) -> FindingSummary:
+        """Return an exact summary by walking the status index with a narrow projection.
+
+        The dashboard is single-account and this deliberately avoids a second aggregate table whose
+        updates would need to remain transactionally consistent with every lifecycle transition.
+        """
+        count = 0
+        known_savings_count = 0
+        totals: dict[str, Decimal] = {}
+        start_key: Mapping[str, object] | None = None
+        while True:
+            request: dict[str, object] = {
+                "IndexName": FINDINGS_BY_STATUS_LAST_DETECTED_AT_INDEX,
+                "KeyConditionExpression": "#status = :status",
+                "ExpressionAttributeNames": {
+                    "#status": "status",
+                    "#savings_amount": "estimated_monthly_savings_amount",
+                    "#savings_currency": "estimated_monthly_savings_currency",
+                },
+                "ExpressionAttributeValues": {":status": status.value},
+                "ProjectionExpression": "#savings_amount, #savings_currency",
+            }
+            if start_key is not None:
+                request["ExclusiveStartKey"] = dict(start_key)
+            response = self._table.query(**request)
+            for item in _response_items(response, entity_name="finding summary"):
+                count += 1
+                amount = item.get("estimated_monthly_savings_amount")
+                currency = item.get("estimated_monthly_savings_currency")
+                if amount is None or not isinstance(currency, str):
+                    continue
+                known_savings_count += 1
+                totals[currency] = totals.get(currency, Decimal("0")) + Decimal(str(amount))
+            last_key = response.get("LastEvaluatedKey")
+            if last_key is None:
+                break
+            if not isinstance(last_key, Mapping):
+                raise ValueError("DynamoDB finding summary LastEvaluatedKey must be a map")
+            start_key = last_key
+
+        return FindingSummary(
+            finding_count=count,
+            findings_with_known_savings_count=known_savings_count,
+            known_monthly_savings_by_currency={
+                currency: Money(amount=amount, currency=currency)
+                for currency, amount in totals.items()
+            },
+        )
 
 
 class DynamoDbFindingApprovalRepository:
@@ -253,6 +360,7 @@ class DynamoDbScanRunRepository:
                 "scan_id": scan_run.scan_id,
                 "scanner_name": scan_run.scanner_name,
                 "started_at": _timestamp(scan_run.started_at),
+                "dashboard_partition": DASHBOARD_SCAN_RUN_PARTITION,
                 "status": "running",
             },
             ConditionExpression="attribute_not_exists(scan_id)",
@@ -277,6 +385,30 @@ class DynamoDbScanRunRepository:
                 ":finding_count": finding_count,
                 ":running": "running",
             },
+        )
+
+    def list_recent(self, *, limit: int, cursor: str | None) -> ScanRunPage:
+        """Return recent scanner activity through the narrow dashboard index."""
+        request: dict[str, object] = {
+            "IndexName": SCAN_RUNS_BY_STARTED_AT_INDEX,
+            "KeyConditionExpression": "#partition = :partition",
+            "ExpressionAttributeNames": {"#partition": "dashboard_partition"},
+            "ExpressionAttributeValues": {":partition": DASHBOARD_SCAN_RUN_PARTITION},
+            "Limit": limit,
+            "ScanIndexForward": False,
+        }
+        if cursor is not None:
+            request["ExclusiveStartKey"] = _decode_cursor(
+                cursor,
+                expected_keys={"scan_id", "dashboard_partition", "started_at"},
+            )
+        response = self._table.query(**request)
+        return ScanRunPage(
+            items=[
+                _scan_run_from_item(item)
+                for item in _response_items(response, entity_name="scan run")
+            ],
+            next_cursor=_next_cursor(response),
         )
 
     def fail(self, scan_run: ScanRun, *, completed_at: datetime, failure_type: str) -> None:
@@ -361,6 +493,67 @@ def _approval_from_item(item: Mapping[str, object]) -> FindingApproval | None:
     return FindingApproval(approved_by=approved_by, approved_at=_parse_timestamp(approved_at))
 
 
+def _scan_run_from_item(item: Mapping[str, object]) -> ScanRun:
+    completed_at = item.get("completed_at")
+    failure_type = item.get("failure_type")
+    return ScanRun(
+        scan_id=_required_str(item, "scan_id"),
+        scanner_name=_required_str(item, "scanner_name"),
+        started_at=_parse_timestamp(_required_str(item, "started_at")),
+        completed_at=_parse_timestamp(completed_at) if isinstance(completed_at, str) else None,
+        status=_required_str(item, "status"),
+        evaluated_resource_count=_optional_non_negative_int(item, "evaluated_resource_count"),
+        finding_count=_optional_non_negative_int(item, "finding_count"),
+        failure_type=failure_type if isinstance(failure_type, str) else None,
+    )
+
+
+def _response_items(
+    response: Mapping[str, object], *, entity_name: str
+) -> list[Mapping[str, object]]:
+    items = response.get("Items", [])
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        raise ValueError(f"DynamoDB {entity_name} response Items must be a sequence")
+    mapped_items: list[Mapping[str, object]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"DynamoDB {entity_name} item must be a map")
+        mapped_items.append(item)
+    return mapped_items
+
+
+def _next_cursor(response: Mapping[str, object]) -> str | None:
+    last_key = response.get("LastEvaluatedKey")
+    if last_key is None:
+        return None
+    if not isinstance(last_key, Mapping):
+        raise ValueError("DynamoDB LastEvaluatedKey must be a map")
+    return _encode_cursor(last_key)
+
+
+def _encode_cursor(last_evaluated_key: Mapping[str, object]) -> str:
+    values: dict[str, str] = {}
+    for key, value in last_evaluated_key.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("DynamoDB pagination keys must contain only strings")
+        values[key] = value
+    encoded = json.dumps(values, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii")
+
+
+def _decode_cursor(cursor: str, *, expected_keys: set[str]) -> dict[str, str]:
+    try:
+        decoded = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        value = json.loads(decoded)
+    except (UnicodeEncodeError, ValueError, binascii.Error) as error:
+        raise ValueError("Pagination cursor is invalid") from error
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise ValueError("Pagination cursor is invalid")
+    if not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise ValueError("Pagination cursor is invalid")
+    return value
+
+
 def _audit_event_item(audit_event: AuditEvent) -> dict[str, object]:
     return {
         "finding_id": {"S": audit_event.finding_id},
@@ -392,6 +585,21 @@ def _required_int(values: Mapping[str, object], name: str) -> int:
     value = values.get(name)
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ValueError(f"DynamoDB finding {name} must be a positive integer")
+    return value
+
+
+def _optional_non_negative_int(values: Mapping[str, object], name: str) -> int | None:
+    value = values.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"DynamoDB scan run {name} must be a non-negative integer")
+    if isinstance(value, Decimal):
+        if value != value.to_integral_value():
+            raise ValueError(f"DynamoDB scan run {name} must be a non-negative integer")
+        value = int(value)
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"DynamoDB scan run {name} must be a non-negative integer")
     return value
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from cost_optimization.api.security import OperatorIdentityResolver
+from cost_optimization.api.security import AuthenticatedIdentityResolver, OperatorIdentityResolver
 from cost_optimization.config import Environment, OperatorIdentitySource, Settings
 
 
@@ -30,6 +30,20 @@ def test_jwt_identity_resolver_uses_verified_subject_for_operator_audit_identity
     )
 
     assert resolver.resolve(request) == "cognito-subject-123"
+
+
+def test_authenticated_jwt_identity_resolver_allows_readers_without_operator_membership() -> None:
+    resolver = AuthenticatedIdentityResolver(
+        Settings(
+            environment=Environment.PRODUCTION,
+            operator_identity_source=OperatorIdentitySource.API_GATEWAY_JWT,
+        )
+    )
+    request = _request_with_event(
+        {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "cognito-reader-123"}}}}}
+    )
+
+    assert resolver.resolve(request) == "cognito-reader-123"
 
 
 def test_jwt_identity_resolver_rejects_missing_operator_group() -> None:

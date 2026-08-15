@@ -25,10 +25,12 @@ authorizer.
   to approve findings and request cleanup.
 - API Gateway validates token signature, issuer, audience, and expiry before
   invoking the Lambda integration.
-- FastAPI extracts the API Gateway-provided JWT `sub` and checks the Cognito
-  group claim. That subject becomes the audit actor.
-- The production `Settings` model rejects the trusted-header identity source.
-  The header remains only for explicit local development and test settings.
+- FastAPI extracts the API Gateway-provided JWT `sub` for authenticated
+  dashboard reads. It additionally checks the Cognito group claim for approval
+  and cleanup-request operations; that verified subject becomes the audit actor.
+- The identity resolver rejects the trusted-header identity source in
+  production. The header remains only for explicit local development and test
+  settings.
 
 AWS documents that HTTP API JWT authorizers validate JWT claims before
 forwarding requests and expose validated claims to the Lambda integration.
@@ -65,8 +67,9 @@ to operate.
 ## Consequences
 
 The system gains an authenticated public entry point only after deployment.
-Operators must be explicitly provisioned and placed in the required Cognito
-group. The API Lambda has permissions only to read findings, atomically record
+Users must be explicitly provisioned. Only users placed in the required
+operator group can approve findings or request cleanup. The API Lambda has
+permissions only to read findings and scan runs, atomically record
 approval/audit events, and publish an explicit cleanup request; it cannot
 delete EBS volumes.
 

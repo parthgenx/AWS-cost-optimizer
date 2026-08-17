@@ -162,7 +162,11 @@ Resources:
         - email
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
-      MfaConfiguration: OPTIONAL
+      # Do not enable SMS MFA implicitly. This self-hosted dashboard has no
+      # phone-number collection or SMS configuration, and public signup is
+      # disabled. Add a reviewed TOTP-based MFA configuration in a future
+      # identity-hardening change rather than introducing SMS cost and PII.
+      MfaConfiguration: "OFF"
       Policies:
         PasswordPolicy:
           MinimumLength: 14
@@ -205,7 +209,7 @@ Resources:
   ApiUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
-      Domain: !Sub "aws-cost-optimizer-${Environment}-${AWS::AccountId}"
+      Domain: !Sub "cost-optimizer-${Environment}-${AWS::AccountId}"
       UserPoolId: !Ref ApiUserPool
 
   ApiOperatorsGroup:

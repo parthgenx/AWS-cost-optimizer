@@ -11,6 +11,11 @@ Parameters:
       - staging
       - prod
     Description: Deployment environment name.
+  DashboardOrigin:
+    Type: String
+    AllowedPattern: "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.vercel\\.app$"
+    ConstraintDescription: Provide the exact HTTPS Vercel production origin without a trailing slash.
+    Description: Exact Vercel production origin allowed for the Cognito browser client and API Gateway CORS.
   ScheduledScansEnabled:
     Type: String
     Default: "false"
@@ -191,10 +196,10 @@ Resources:
         - openid
         - email
       CallbackURLs:
-        - !Sub "https://${DashboardDistribution.DomainName}/auth/callback"
+        - !Sub "${DashboardOrigin}/auth/callback"
         - http://localhost:5173/auth/callback
       LogoutURLs:
-        - !Sub "https://${DashboardDistribution.DomainName}/"
+        - !Sub "${DashboardOrigin}/"
         - http://localhost:5173/
       SupportedIdentityProviders:
         - COGNITO
@@ -218,136 +223,6 @@ Resources:
       GroupName: cost-optimizer-operators
       Description: Operators allowed to approve findings and request EBS cleanup.
       UserPoolId: !Ref ApiUserPool
-
-  DashboardBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "aws-cost-optimizer-dashboard-${Environment}-${AWS::AccountId}-${AWS::Region}"
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  DashboardOriginAccessControl:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Description: !Sub "Signed CloudFront access for the ${Environment} dashboard bucket."
-        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  DashboardCachePolicy:
-    Type: AWS::CloudFront::CachePolicy
-    Properties:
-      CachePolicyConfig:
-        Comment: Cache static dashboard assets without forwarding viewer data to S3.
-        DefaultTTL: 86400
-        MaxTTL: 31536000
-        MinTTL: 0
-        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
-        ParametersInCacheKeyAndForwardedToOrigin:
-          CookiesConfig:
-            CookieBehavior: none
-          EnableAcceptEncodingBrotli: true
-          EnableAcceptEncodingGzip: true
-          HeadersConfig:
-            HeaderBehavior: none
-          QueryStringsConfig:
-            QueryStringBehavior: none
-
-  DashboardResponseHeadersPolicy:
-    Type: AWS::CloudFront::ResponseHeadersPolicy
-    Properties:
-      ResponseHeadersPolicyConfig:
-        Name: !Sub "aws-cost-optimizer-dashboard-${Environment}"
-        SecurityHeadersConfig:
-          ContentSecurityPolicy:
-            ContentSecurityPolicy: !Sub >-
-              default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none';
-              script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'
-              https://*.execute-api.${AWS::Region}.${AWS::URLSuffix}
-              https://${ApiUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com;
-            Override: true
-          ContentTypeOptions:
-            Override: true
-          FrameOptions:
-            FrameOption: DENY
-            Override: true
-          ReferrerPolicy:
-            ReferrerPolicy: strict-origin-when-cross-origin
-            Override: true
-          StrictTransportSecurity:
-            AccessControlMaxAgeSec: 31536000
-            IncludeSubdomains: true
-            Override: true
-            Preload: false
-
-  DashboardDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Comment: !Sub "Self-hosted dashboard for aws-cost-optimizer ${Environment}."
-        CustomErrorResponses:
-          - ErrorCachingMinTTL: 0
-            ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-          - ErrorCachingMinTTL: 0
-            ErrorCode: 404
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-        DefaultCacheBehavior:
-          AllowedMethods:
-            - GET
-            - HEAD
-          CachedMethods:
-            - GET
-            - HEAD
-          CachePolicyId: !Ref DashboardCachePolicy
-          Compress: true
-          ResponseHeadersPolicyId: !Ref DashboardResponseHeadersPolicy
-          TargetOriginId: DashboardS3Origin
-          ViewerProtocolPolicy: redirect-to-https
-        DefaultRootObject: index.html
-        Enabled: true
-        HttpVersion: http2
-        IPV6Enabled: true
-        Origins:
-          - DomainName: !GetAtt DashboardBucket.RegionalDomainName
-            Id: DashboardS3Origin
-            OriginAccessControlId: !GetAtt DashboardOriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ""
-        PriceClass: PriceClass_100
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
-
-  DashboardBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref DashboardBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: AllowCloudFrontReadOnlyAccess
-            Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub "${DashboardBucket.Arn}/*"
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DashboardDistribution}"
 
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
@@ -374,7 +249,7 @@ Resources:
           - POST
           - OPTIONS
         AllowOrigins:
-          - !Sub "https://${DashboardDistribution.DomainName}"
+          - !Ref DashboardOrigin
           - http://localhost:5173
         MaxAge: 600
       AccessLogSettings:
@@ -1337,14 +1212,8 @@ Resources:
 
 Outputs:
   DashboardUrl:
-    Description: HTTPS URL for the self-hosted operator dashboard.
-    Value: !Sub "https://${DashboardDistribution.DomainName}"
-  DashboardDistributionId:
-    Description: CloudFront distribution ID used to invalidate dashboard assets after deployment.
-    Value: !Ref DashboardDistribution
-  DashboardBucketName:
-    Description: Private S3 bucket containing the built dashboard assets.
-    Value: !Ref DashboardBucket
+    Description: Configured HTTPS Vercel production origin for the operator dashboard.
+    Value: !Ref DashboardOrigin
   OperationalDashboardName:
     Description: CloudWatch dashboard for scanner, workflow, queue, and API health.
     Value: !Ref OperationalDashboard

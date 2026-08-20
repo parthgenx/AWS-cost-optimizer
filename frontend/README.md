@@ -7,10 +7,10 @@ permissions.
 
 ## Current scope
 
-Phase 3 adds server-paginated findings, supported lifecycle/resource/severity
-filters, evidence and lifecycle detail, and confirmation-gated operator actions.
-Only approved unattached EBS volume findings can request cleanup. Static-site
-hosting remains a later phase.
+The dashboard provides server-paginated findings, supported
+lifecycle/resource/severity filters, evidence and lifecycle detail, and
+confirmation-gated operator actions. Only approved unattached EBS volume
+findings can request cleanup.
 
 ## Local configuration
 
@@ -31,11 +31,10 @@ The Cognito Hosted Login callback is always:
 http://localhost:5173/auth/callback
 ```
 
-The SAM stack registers both the deployed CloudFront callback URL and the local
-development URL with the Cognito app client. GitHub Actions reads the deployed
-stack outputs and supplies the hosted values at build time. Leaving values unset
-locally intentionally shows a configuration-required screen rather than a
-misleading mock dashboard.
+The SAM stack registers both the exact Vercel production callback URL and the
+local development URL with the Cognito app client. Leaving values unset locally
+intentionally shows a configuration-required screen rather than a misleading
+mock dashboard.
 
 ## Authentication and API boundary
 
@@ -52,16 +51,29 @@ cleanup-request calls.
 
 ## Hosting
 
-The frontend is published to a private S3 bucket through the deployment
-workflow. CloudFront is the sole HTTPS viewer endpoint and uses Origin Access
-Control to read the bucket; direct S3 public access is blocked. CloudFront
-returns `index.html` for missing object paths so direct detail URLs work with
-the React router.
+Vercel hosts the static application with `frontend` configured as the Vercel
+project root. `vercel.json` uses `npm ci`, builds `dist`, rewrites direct routes
+to `index.html`, and applies browser security headers. Vercel has no AWS
+credentials, DynamoDB access, or backend execution role.
 
-The API Gateway CORS policy allows the exact CloudFront origin and
-`http://localhost:5173` for local development. It allows `GET`, `POST`, and
-`OPTIONS` with `authorization` and `content-type`; no wildcard origin or cookie
-credentials are used.
+Before deploying AWS, choose the Vercel project's stable production
+`https://<project>.vercel.app` URL. Supply it as `DashboardOrigin`; API Gateway
+CORS then allows only that exact origin and `http://localhost:5173`. It allows
+`GET`, `POST`, and `OPTIONS` with `authorization` and `content-type`; no
+wildcard origin or cookie credentials are used.
+
+Set these **Production-only** Vercel environment variables from CloudFormation
+outputs before deploying the live dashboard:
+
+| Variable | Stack output |
+|---|---|
+| `VITE_API_BASE_URL` | `ApiEndpoint` |
+| `VITE_COGNITO_ISSUER` | `CognitoIssuer` |
+| `VITE_COGNITO_DOMAIN` | `CognitoDomain` |
+| `VITE_COGNITO_CLIENT_ID` | `DashboardCognitoClientId` |
+
+Do not configure production values for preview deployments. Preview URLs are
+not Cognito callback or API CORS origins.
 
 ## Findings workflow
 

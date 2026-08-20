@@ -9,25 +9,38 @@ Lambda, and an API Lambda. The API is exposed through API Gateway HTTP API and
 protected by a Cognito JWT authorizer. The stack also includes separate SNS
 topics for findings and operational alerts, EventBridge rules, encrypted SQS
 dead-letter queues, CloudWatch alarms, an operational dashboard, and the
-self-hosted React dashboard delivery layer.
+Cognito-authenticated React dashboard integration.
 
 ## Hosted dashboard
 
-The frontend is built outside the Lambda package and deployed as static assets
-to a private, application-owned S3 bucket. CloudFront is the only public
-viewer endpoint. Its Origin Access Control signs requests to S3; the bucket
-policy permits `s3:GetObject` only from that exact distribution. S3 public
-access blocks remain enabled and the bucket has no static-website endpoint.
+The frontend is built outside the Lambda package and served as a static Vite
+application by Vercel. Vercel has no AWS credentials, backend execution role,
+or DynamoDB access. It only delivers the browser bundle; API Gateway remains
+the sole backend entry point.
 
-CloudFront uses its default HTTPS certificate and redirects HTTP to HTTPS. A
-custom error mapping returns `index.html` for S3 403 and 404 responses, so
-direct navigation and refreshes on routes such as `/findings/<finding-id>` are
-handled by the React router. A response-headers policy adds a restrictive CSP,
-HSTS, frame denial, MIME sniffing protection, and a referrer policy.
+Before deploying AWS, create a Vercel project with `frontend` as its root
+directory and record its stable production `https://<project>.vercel.app`
+origin. Supply that exact origin as `DashboardOrigin` to SAM or as the
+`DASHBOARD_ORIGIN` GitHub Actions environment variable. The stack validates an
+HTTPS Vercel origin without a trailing slash; operators must deliberately use
+the stable production URL, not a Vercel preview URL.
 
-No custom domain, Route 53 zone, or multi-account access layer is created. The
-CloudFront URL is the normal recruiter-facing dashboard URL for one deployment
-in one AWS account.
+No custom domain, Route 53 zone, multi-account access layer, CloudFront
+distribution, or dashboard S3 bucket is created. The Vercel production URL is
+the normal operator-dashboard URL for one AWS-account deployment.
+
+### Provider setup order
+
+1. Import this repository into Vercel, select `frontend` as the project root,
+   and keep `main` as the production branch. The initial deployment is safe but
+   shows the dashboard's configuration-required screen because no API settings
+   exist yet.
+2. Copy Vercel's stable production URL, add it as the GitHub `development`
+   environment variable `DASHBOARD_ORIGIN`, and deploy the AWS stack.
+3. Read the public API and Cognito CloudFormation outputs, add the four
+   `VITE_*` values to Vercel's Production environment, and redeploy Vercel.
+4. Verify sign-in only at the production URL. Do not add preview deployment URLs
+   to Cognito callbacks, API Gateway CORS, or Vercel Production variables.
 
 ### Cognito browser application
 
@@ -39,8 +52,8 @@ operators to `cost-optimizer-operators`.
 
 The app client allows these exact return locations:
 
-- `https://<CloudFront-domain>/auth/callback` after sign-in.
-- `https://<CloudFront-domain>/` after sign-out.
+- `https://<project>.vercel.app/auth/callback` after sign-in.
+- `https://<project>.vercel.app/` after sign-out.
 - The equivalent `http://localhost:5173` routes for deliberate local UI work.
 
 The browser receives tokens through the existing frontend OIDC client and sends
@@ -52,13 +65,29 @@ of access control.
 
 API Gateway owns CORS, rather than FastAPI. It allows only these origins:
 
-- The exact CloudFront distribution HTTPS origin created by this stack.
+- The exact Vercel production HTTPS origin supplied as `DashboardOrigin`.
 - `http://localhost:5173` for local development.
 
 It allows only `GET`, `POST`, and `OPTIONS`, with `authorization` and
 `content-type` request headers. It does not enable credentialed cookies or a
 wildcard origin. API Gateway responds to browser preflight requests before the
 FastAPI Lambda is invoked.
+
+### Vercel routing and browser headers
+
+`frontend/vercel.json` builds the existing Vite application, serves `dist`, and
+rewrites all non-static routes to `index.html`. This preserves direct navigation
+and refreshes for `/findings/<finding-id>` without proxying backend requests
+through Vercel.
+
+The manifest also sets CSP, HSTS, frame denial, MIME sniffing protection,
+referrer policy, and permissions policy headers. Its CSP allows browser
+connections only to the configured AWS region's API Gateway hostname pattern
+(`https://*.execute-api.ap-south-1.amazonaws.com`) and Cognito managed-login
+hostname pattern (`https://*.auth.ap-south-1.amazoncognito.com`). If the
+project region changes, update these two CSP patterns in the same reviewed
+change as the region change. Vercel preview deployments deliberately receive no
+production `VITE_*` configuration and are not Cognito callback or CORS origins.
 
 ## Why AWS SAM
 
@@ -132,11 +161,11 @@ The API Lambda can read one finding, atomically write an approval and audit
 event, and publish a cleanup request to the default EventBridge bus. It has no
 permission to delete an EBS volume or modify the resources being evaluated.
 
-The GitHub deployment role receives write access only to the deterministic
-development dashboard bucket and can create CloudFront resources through the
-reviewed development stack. It does not grant the API Lambda any new IAM
-permission. The S3 bucket policy grants runtime reads to CloudFront, not to
-public S3 clients.
+The GitHub deployment role packages Lambda artifacts into its dedicated private
+SAM artifact bucket and deploys the reviewed AWS stack. It has no CloudFront or
+dashboard-asset publishing permissions and does not grant the API Lambda any
+new IAM permission. Vercel's separate GitHub integration publishes only the
+frontend source and has no AWS identity.
 
 ## Environment naming
 
@@ -157,26 +186,37 @@ sam build --template-file infrastructure/template.yaml
 
 Deployment is deliberately deferred until the infrastructure is reviewed.
 
-## Deployment outputs and frontend publishing
+## Deployment outputs and frontend configuration
 
 After deployment, the stack exposes the following public configuration values:
 
 | Output | Purpose |
 |---|---|
-| `DashboardUrl` | HTTPS CloudFront URL for the dashboard. |
-| `DashboardBucketName` | Private S3 origin used only by deployment and cleanup. |
-| `DashboardDistributionId` | CloudFront distribution invalidated after publishing assets. |
-| `ApiEndpoint` | API Gateway base URL compiled into the frontend. |
-| `CognitoIssuer` | OIDC issuer URL compiled into the frontend. |
-| `CognitoDomain` | Cognito managed-login URL compiled into the frontend. |
-| `DashboardCognitoClientId` | Public browser client ID compiled into the frontend. |
+| `DashboardUrl` | Configured Vercel production URL. |
+| `ApiEndpoint` | API Gateway base URL configured in Vercel. |
+| `CognitoIssuer` | OIDC issuer URL configured in Vercel. |
+| `CognitoDomain` | Cognito managed-login URL configured in Vercel. |
+| `DashboardCognitoClientId` | Public browser client ID configured in Vercel. |
 
-The manually-dispatched GitHub workflow deploys infrastructure first, reads
-those outputs, then runs `npm ci` and `npm run build` with the four `VITE_*`
-configuration values. It uploads hashed assets with a long immutable cache
-period, uploads `index.html` with `no-store`, and creates a CloudFront `/*`
-invalidation. No environment file, AWS credential, Cognito password, or token
-is committed to the repository.
+The manually-dispatched GitHub workflow deploys only AWS infrastructure. It
+requires the protected `development` environment's non-secret
+`DASHBOARD_ORIGIN` variable and passes it to `DashboardOrigin`.
+
+After AWS deployment, configure these **Production-only** Vercel environment
+variables from the corresponding stack outputs, then redeploy the Vercel
+project:
+
+| Vercel variable | Stack output |
+|---|---|
+| `VITE_API_BASE_URL` | `ApiEndpoint` |
+| `VITE_COGNITO_ISSUER` | `CognitoIssuer` |
+| `VITE_COGNITO_DOMAIN` | `CognitoDomain` |
+| `VITE_COGNITO_CLIENT_ID` | `DashboardCognitoClientId` |
+
+These values identify public browser endpoints; they are not secrets. Do not
+configure AWS credentials, Cognito passwords, tokens, or a Cognito client
+secret in Vercel. Do not configure the production variables for preview
+deployments.
 
 ## Cleaning up the development environment
 
@@ -187,13 +227,11 @@ The project includes a deliberately narrow cleanup command:
 ```
 
 It only targets the `aws-cost-optimizer-dev` stack. After a `DELETE`
-confirmation, it reads the private `DashboardBucketName` from that exact stack
-and removes its non-versioned static assets. It then runs `sam delete`, which
-removes the bucket, bucket policy, CloudFront distribution, Cognito managed-login
-domain, API, Lambdas, tables, and other application resources. The script
-leaves an empty shared SAM artifact bucket alone because it may be used by
-another SAM project; an empty S3 bucket has no storage charge. It verifies that
-the stack no longer exists before reporting success.
+confirmation, it runs `sam delete`, which removes Cognito managed-login,
+API Gateway, Lambdas, tables, and other application resources. It leaves an
+empty shared SAM artifact bucket alone because it may be used by another SAM
+project; an empty S3 bucket has no storage charge. It verifies that the stack
+no longer exists before reporting success.
 
 For automation, such as a temporary sandbox environment, use:
 
@@ -208,7 +246,9 @@ AWS can report charges after resources are removed because billing data is
 delayed. Once the script succeeds, however, this project's deployed resources
 no longer generate ongoing charges in the selected region.
 
-The separate GitHub OIDC bootstrap stack is intentionally outside this cleanup
-script because it contains account-level CI identity and artifact-bucket
-resources. See [CI/CD and GitHub OIDC deployment](ci-cd.md) for its independent
-retention and removal decision.
+The Vercel dashboard project is intentionally outside this AWS-only cleanup
+script. Delete it manually in Vercel Project Settings and disconnect its GitHub
+repository integration when retiring the environment. The separate GitHub OIDC
+bootstrap stack is also outside this script because it contains account-level CI
+identity and artifact-bucket resources. See [CI/CD and GitHub OIDC deployment](ci-cd.md)
+for its independent retention and removal decision.

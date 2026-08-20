@@ -306,11 +306,12 @@ npm run dev
 
 With valid public Cognito and API configuration, the dashboard provides an
 overview plus paginated findings, evidence, lifecycle context, and guarded
-operator workflows. The deployment stack serves its built static assets through
-CloudFront from a private S3 origin; see [deployment documentation](docs/deployment.md)
-for the intentionally manual deployment workflow. With no `.env.local` values,
-the dashboard displays an intentional configuration-required screen instead of
-mock data.
+operator workflows. Vercel serves the static frontend while the self-hosted AWS
+backend remains the sole API, authorization, and resource-management boundary;
+see [deployment documentation](docs/deployment.md) for the intentionally manual
+AWS deployment and separate Vercel setup. With no `.env.local` values, the
+dashboard displays an intentional configuration-required screen instead of mock
+data.
 
 ### Run quality checks
 

@@ -20,12 +20,11 @@ repository and deployment context. [GitHub OIDC on AWS](https://docs.github.com/
 
 `infrastructure/github-oidc-bootstrap.yaml` is intentionally separate from the
 application stack. It creates the GitHub OIDC provider, a narrowly purposed
-deployment role, and a private encrypted artifact bucket. The deployment role
-can manage the named development dashboard S3 bucket and CloudFront resources
-through the application stack, then upload only that dashboard's assets and
-invalidate its distribution. The artifact bucket is retained if the bootstrap
-stack is deleted, because deployment artifacts are an account-level concern and
-may need an independent retention decision.
+deployment role, and a private encrypted artifact bucket. The role deploys AWS
+resources and packages Lambda artifacts only; it cannot publish dashboard
+assets or create CloudFront resources. The artifact bucket is retained if the
+bootstrap stack is deleted, because deployment artifacts are an account-level
+concern and may need an independent retention decision.
 
 Before running it, create a GitHub environment named `development` in the
 repository settings and configure protection rules that allow deployments only
@@ -62,6 +61,7 @@ for the `development` environment:
 | `AWS_DEPLOY_ROLE_ARN` | `DeploymentRoleArn` output |
 | `AWS_SAM_ARTIFACT_BUCKET` | `DeploymentArtifactsBucketName` output |
 | `AWS_ACCOUNT_ID` | Target AWS account ID |
+| `DASHBOARD_ORIGIN` | Exact Vercel production origin, for example `https://aws-cost-optimizer-dashboard.vercel.app` |
 
 These identifiers are configuration values, not secrets. Do not create static
 AWS access-key secrets for this repository.
@@ -84,16 +84,19 @@ workflow, role, environment, and stack—not a modified development command.
 
 The workflow performs these ordered steps:
 
-1. Validates, container-builds, and deploys the SAM stack.
-2. Reads the deployed API, Cognito, private dashboard-bucket, and CloudFront
-   outputs from CloudFormation.
-3. Builds the React app with those public `VITE_*` values.
-4. Publishes the generated assets to the private origin bucket, with long cache
-   headers for hashed files and no-store for `index.html`.
-5. Requests a CloudFront `/*` invalidation and prints the HTTPS dashboard URL.
+1. Validates the exact Vercel `DASHBOARD_ORIGIN` value.
+2. Validates, container-builds, and deploys the SAM stack with that origin
+   configured as the Cognito callback/logout and API Gateway CORS origin.
+
+Vercel's GitHub integration independently builds and hosts the `frontend`
+directory. Configure the four public `VITE_*` values from the CloudFormation
+outputs in Vercel's **Production** environment, then redeploy from Vercel. Do
+not configure them for preview deployments: preview URLs are not registered
+Cognito callbacks or CORS origins.
 
 The runtime browser never uses the deployment role or artifact bucket. It is a
-separate Cognito-authenticated client of API Gateway.
+separate Cognito-authenticated client of API Gateway. Vercel receives neither
+AWS credentials nor a backend execution role.
 
 ## Trade-offs
 

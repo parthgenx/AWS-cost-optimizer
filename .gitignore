@@ -22,3 +22,6 @@ backend/.venv/
 build/
 dist/
 .aws-sam/
+
+# Vercel CLI project metadata
+frontend/.vercel/

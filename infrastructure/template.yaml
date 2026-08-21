@@ -320,12 +320,19 @@ Resources:
                 - events:PutEvents
               Resource: !Sub "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
       Events:
-        AuthenticatedApi:
+        AuthenticatedGetApi:
           Type: HttpApi
           Properties:
             ApiId: !Ref CostOptimizationHttpApi
             Path: /{proxy+}
-            Method: ANY
+            Method: GET
+            PayloadFormatVersion: "2.0"
+        AuthenticatedPostApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CostOptimizationHttpApi
+            Path: /{proxy+}
+            Method: POST
             PayloadFormatVersion: "2.0"
 
   ApiFunctionLogGroup:

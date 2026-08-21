@@ -16,6 +16,12 @@ Parameters:
     AllowedPattern: "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?\\.vercel\\.app$"
     ConstraintDescription: Provide the exact HTTPS Vercel production origin without a trailing slash.
     Description: Exact Vercel production origin allowed for the Cognito browser client and API Gateway CORS.
+  EbsUnattachedMinimumVolumeAgeDays:
+    Type: Number
+    Default: 14
+    MinValue: 1
+    MaxValue: 3650
+    Description: Minimum age in days before an unattached EBS volume can become a finding or qualify during cleanup revalidation.
   ScheduledScansEnabled:
     Type: String
     Default: "false"
@@ -349,6 +355,7 @@ Resources:
           COST_OPTIMIZER_FINDINGS_TABLE_NAME: !Ref FindingsTable
           COST_OPTIMIZER_SCAN_RUNS_TABLE_NAME: !Ref ScanRunsTable
           COST_OPTIMIZER_SCAN_NOTIFICATIONS_TOPIC_ARN: !Ref ScanNotificationsTopic
+          COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS: !Ref EbsUnattachedMinimumVolumeAgeDays
       Policies:
         - Statement:
             - Sid: DescribeEbsVolumes
@@ -679,6 +686,7 @@ Resources:
           COST_OPTIMIZER_AUDIT_EVENTS_TABLE_NAME: !Ref AuditEventsTable
           COST_OPTIMIZER_CLEANUP_DRY_RUN: !Ref CleanupDryRun
           COST_OPTIMIZER_CLEANUP_EXECUTION_ENABLED: !Ref CleanupExecutionEnabled
+          COST_OPTIMIZER_EBS_UNATTACHED_MINIMUM_VOLUME_AGE_DAYS: !Ref EbsUnattachedMinimumVolumeAgeDays
       Policies:
         - Statement:
             - Sid: ReadAndTransitionFindings

@@ -134,6 +134,12 @@ ScanScheduleExpression="rate(1 hour)"'`. EventBridge retries a failed Lambda
 invocation up to three times for one hour. After that, it writes the original
 event to the encrypted SQS dead-letter queue for investigation.
 
+`EbsUnattachedMinimumVolumeAgeDays` defaults to `14`. It is passed to both the
+EBS scanner and the isolated cleanup Lambda so a volume must satisfy the same
+age rule when detected and immediately before any cleanup. A lower value is
+appropriate only for an isolated, temporary demonstration environment; it
+never changes the default production safety threshold.
+
 SNS notifications are sent only when a completed scan has one or more findings.
 This avoids routine “nothing found” email noise. Email recipients must confirm
 the SNS subscription before receiving messages. A failure to publish a

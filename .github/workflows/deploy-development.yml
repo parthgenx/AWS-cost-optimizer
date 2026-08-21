@@ -19,7 +19,7 @@ jobs:
   deploy:
     name: Deploy development stack
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     environment:
       name: development
 

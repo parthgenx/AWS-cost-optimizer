@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiClient } from '../../api/client'
 import type { Finding } from '../../api/types'
 
 import { FindingActions } from './FindingActions'
+
+afterEach(cleanup)
 
 const openEbsFinding: Finding = {
   finding_id: 'finding-1',
@@ -65,5 +67,18 @@ describe('FindingActions', () => {
 
     expect(await screen.findByText(/Approval recorded/)).toBeInTheDocument()
     expect(apiClient.approveFinding).toHaveBeenCalledWith('finding-1')
+  })
+
+  it('focuses the safe cancel action and restores focus when Escape closes a confirmation dialog', async () => {
+    renderActions()
+
+    const trigger = screen.getByRole('button', { name: 'Approve finding' })
+    trigger.click()
+
+    expect(await screen.findByRole('button', { name: 'Cancel' })).toHaveFocus()
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 })

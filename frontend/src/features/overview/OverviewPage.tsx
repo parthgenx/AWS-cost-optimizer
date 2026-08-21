@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  ArrowUpRight,
   CircleCheckBig,
   Clock3,
   DollarSign,
@@ -13,6 +12,8 @@ import { Link } from 'react-router-dom'
 
 import { ApiError, createApiClient } from '../../api/client'
 import type { DashboardOverview, ScanRun } from '../../api/types'
+import { ConsolePageHeader } from '../../components/ConsolePageHeader'
+import { OperationalStatePanel } from '../../components/OperationalStatePanel'
 import { getDashboardConfiguration } from '../../config'
 
 export function OverviewPage({ accessToken }: { accessToken: string | undefined }) {
@@ -67,19 +68,15 @@ export function OverviewContent({ data, error, isLoading, onRetry }: OverviewCon
 
   return (
     <section className="overview-page">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Cost operations overview</p>
-          <h1>Focus attention where cloud spend can be reduced safely.</h1>
-          <p className="page-subtitle">
-            Findings are evidence-backed recommendations from scanners running in this AWS account.
-          </p>
-        </div>
-        <button className="secondary-button" type="button" onClick={onRetry}>
+      <ConsolePageHeader
+        action={<button className="secondary-button" type="button" onClick={onRetry}>
           <RefreshCw aria-hidden="true" size={16} />
           Refresh data
-        </button>
-      </div>
+        </button>}
+        eyebrow="Cost operations"
+        summary="Evidence-backed findings from scanners running in this AWS account."
+        title="Overview"
+      />
 
       <section aria-label="Overview metrics" className="metric-grid">
         <MetricCard
@@ -112,43 +109,41 @@ export function OverviewContent({ data, error, isLoading, onRetry }: OverviewCon
         />
       </section>
 
-      {openFindingCount === 0 ? (
-        <EmptyFindings />
-      ) : (
-        <section className="overview-insight" aria-label="Finding overview">
-          <div className="insight-icon" aria-hidden="true">
-            <ScanSearch size={20} />
+      <div className="overview-workspace">
+        <section className="overview-panel overview-panel-activity">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Scan activity</p>
+              <h2>Recent scanner runs</h2>
+            </div>
+            <span className="read-only-label">Read-only</span>
           </div>
-          <div>
-            <p className="eyebrow">Review queue ready</p>
-            <h2>{openFindingCount} finding(s) need human review.</h2>
-            <p>
-              Review evidence, lifecycle status, and scanner context before deciding whether an
-              operator should take action.
-            </p>
-          </div>
-          <Link className="secondary-button" to="/findings">Review findings</Link>
+          {data.recent_scans.length === 0 ? <EmptyScans /> : <div className="scan-list">
+            {data.recent_scans.map((scan) => <ScanRow key={scan.scan_id} scan={scan} />)}
+          </div>}
         </section>
-      )}
 
-      <section className="activity-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Scanner activity</p>
-            <h2>Recent scans</h2>
+        <aside className="overview-panel overview-panel-queue">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Review queue</p>
+              <h2>Prioritized findings</h2>
+            </div>
+            <TriangleAlert aria-hidden="true" className="panel-heading-icon" size={18} />
           </div>
-          <span className="read-only-label">Read-only view</span>
-        </div>
-        {data.recent_scans.length === 0 ? (
-          <EmptyScans />
-        ) : (
-          <div className="scan-list">
-            {data.recent_scans.map((scan) => (
-              <ScanRow key={scan.scan_id} scan={scan} />
-            ))}
+          {openFindingCount === 0 ? <EmptyFindings /> : (
+            <div className="review-queue-summary">
+              <strong>{openFindingCount}</strong>
+              <p>open finding(s) are awaiting evidence review before any operator action.</p>
+              <Link className="primary-button" to="/findings">Open review queue</Link>
+            </div>
+          )}
+          <div className="overview-safety-context">
+            <ShieldCheck aria-hidden="true" size={16} />
+            <span>EBS cleanup remains approval-gated and revalidated by a separate worker.</span>
           </div>
-        )}
-      </section>
+        </aside>
+      </div>
     </section>
   )
 }
@@ -202,28 +197,17 @@ function ScanRow({ scan }: { scan: ScanRun }) {
 
 function EmptyFindings() {
   return (
-    <section className="empty-panel" aria-label="No open findings">
-      <div className="empty-icon" aria-hidden="true">
-        <CircleCheckBig size={24} />
-      </div>
-      <div>
-        <p className="eyebrow">No open findings</p>
-        <h2>The current scan data has no active cost-review items.</h2>
-        <p>A future scheduled scan will refresh this view automatically.</p>
-      </div>
-    </section>
+    <OperationalStatePanel title="No open findings" tone="empty">
+      <p>The current scan data has no active cost-review items.</p>
+    </OperationalStatePanel>
   )
 }
 
 function EmptyScans() {
   return (
-    <div className="empty-scans">
-      <Clock3 aria-hidden="true" size={22} />
-      <div>
-        <strong>No scan activity has been recorded yet.</strong>
-        <p>Enable the EventBridge schedule or run a scanner manually after deployment.</p>
-      </div>
-    </div>
+    <OperationalStatePanel title="No scan activity has been recorded yet." tone="info">
+      <p>Enable the EventBridge schedule or run a scanner manually after deployment.</p>
+    </OperationalStatePanel>
   )
 }
 
@@ -231,18 +215,14 @@ function OverviewError({ error, onRetry }: { error: Error; onRetry: () => void }
   const unauthorized = error instanceof ApiError && [401, 403].includes(error.status)
 
   return (
-    <section className="overview-error" role="alert">
-      <div className="empty-icon empty-icon-error" aria-hidden="true">
-        <TriangleAlert size={24} />
-      </div>
-      <div>
-        <p className="eyebrow">{unauthorized ? 'Access denied' : 'Dashboard unavailable'}</p>
-        <h1>{unauthorized ? 'Your session cannot access the API.' : 'We could not load the overview.'}</h1>
+    <section className="overview-page overview-state-page">
+      <OperationalStatePanel
+        action={<button className="secondary-button" type="button" onClick={onRetry}>Try again</button>}
+        title={unauthorized ? 'Your session cannot access the API.' : 'We could not load the overview.'}
+        tone="error"
+      >
         <p>{error.message}</p>
-      </div>
-      <button className="secondary-button" type="button" onClick={onRetry}>
-        Try again <ArrowUpRight aria-hidden="true" size={16} />
-      </button>
+      </OperationalStatePanel>
     </section>
   )
 }

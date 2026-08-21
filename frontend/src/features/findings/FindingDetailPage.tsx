@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, CircleAlert, DatabaseZap, ScanSearch, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, DatabaseZap, ScanSearch, ShieldCheck } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useMemo } from 'react'
 
 import { ApiError, createApiClient } from '../../api/client'
 import type { Finding } from '../../api/types'
+import { OperationalStatePanel } from '../../components/OperationalStatePanel'
 import { getDashboardConfiguration } from '../../config'
 
 import { FindingActions } from './FindingActions'
@@ -71,17 +72,17 @@ export function FindingDetailContent({
     const missing = error instanceof ApiError && error.status === 404
     const unauthorized = error instanceof ApiError && [401, 403].includes(error.status)
     return (
-      <section className="detail-state" role="alert">
-        <CircleAlert aria-hidden="true" size={26} />
-        <div>
-          <p className="eyebrow">{missing ? 'Finding unavailable' : unauthorized ? 'Access denied' : 'Finding unavailable'}</p>
-          <h1>{missing ? 'This finding no longer exists.' : 'We could not load this finding.'}</h1>
-          <p>{error.message}</p>
-        </div>
-        <div className="detail-state-actions">
+      <section className="detail-state">
+        <OperationalStatePanel
+          action={<div className="detail-state-actions">
           <Link className="secondary-button" to="/findings">Return to findings</Link>
           {!missing && <button className="secondary-button" type="button" onClick={onRetry}>Try again</button>}
-        </div>
+          </div>}
+          title={missing ? 'This finding no longer exists.' : unauthorized ? 'Your session cannot access this finding.' : 'We could not load this finding.'}
+          tone="error"
+        >
+          <p>{error.message}</p>
+        </OperationalStatePanel>
       </section>
     )
   }
@@ -96,9 +97,14 @@ export function FindingDetailContent({
       </Link>
       <div className="detail-heading">
         <div>
-          <p className="eyebrow">{humanize(finding.resource.resource_type)} · {finding.rule_id}</p>
+          <p className="eyebrow">Finding control record</p>
           <h1>{finding.summary}</h1>
           <p>{finding.recommended_action}</p>
+          <div className="detail-resource-meta">
+            <span className="resource-type-badge">{humanize(finding.resource.resource_type)}</span>
+            <span className="monospace-value">{finding.resource.resource_id}</span>
+            <span>{finding.resource.region}</span>
+          </div>
         </div>
         <div className="detail-heading-badges">
           <SeverityBadge severity={finding.severity} />
@@ -107,9 +113,9 @@ export function FindingDetailContent({
       </div>
 
       <section className="detail-highlight-grid" aria-label="Finding summary">
-        <DetailHighlight icon={<DatabaseZap aria-hidden="true" size={20} />} label="Resource" value={finding.resource.resource_id} />
-        <DetailHighlight icon={<ScanSearch aria-hidden="true" size={20} />} label="Potential monthly savings" value={formatCurrency(finding)} />
-        <DetailHighlight icon={<ShieldCheck aria-hidden="true" size={20} />} label="Lifecycle state" value={humanize(finding.status)} />
+        <DetailHighlight icon={<DatabaseZap aria-hidden="true" size={18} />} label="Rule" value={finding.rule_id} />
+        <DetailHighlight icon={<ScanSearch aria-hidden="true" size={18} />} label="Potential monthly savings" value={formatCurrency(finding)} />
+        <DetailHighlight icon={<ShieldCheck aria-hidden="true" size={18} />} label="Lifecycle state" value={humanize(finding.status)} />
       </section>
 
       <div className="detail-layout">

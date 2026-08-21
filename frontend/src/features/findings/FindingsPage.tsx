@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Filter, RefreshCw, SearchX, TriangleAlert } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Filter, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useMemo, useState } from 'react'
 
 import { ApiError, createApiClient } from '../../api/client'
 import type { Finding, FindingSeverity, FindingStatus, ResourceType } from '../../api/types'
+import { ConsolePageHeader } from '../../components/ConsolePageHeader'
+import { OperationalStatePanel } from '../../components/OperationalStatePanel'
 import { getDashboardConfiguration } from '../../config'
 
 import { SeverityBadge, StatusBadge } from './FindingBadges'
@@ -63,20 +65,15 @@ export function FindingsPage({ accessToken }: { accessToken: string | undefined 
 
   return (
     <section className="findings-page">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Evidence-backed review queue</p>
-          <h1>Review cost findings with context before taking action.</h1>
-          <p className="page-subtitle">
-            Lifecycle filters are server-side. The dashboard never discovers resources or calculates
-            eligibility in the browser.
-          </p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => void findingsQuery.refetch()}>
+      <ConsolePageHeader
+        action={<button className="secondary-button" type="button" onClick={() => void findingsQuery.refetch()}>
           <RefreshCw aria-hidden="true" size={16} />
           Refresh findings
-        </button>
-      </div>
+        </button>}
+        eyebrow="Evidence-backed review queue"
+        summary="Filter results server-side and review the retained scanner evidence before an operator takes action."
+        title="Findings"
+      />
 
       <section aria-label="Finding filters" className="filter-bar">
         <div className="filter-label">
@@ -186,17 +183,13 @@ export function FindingsListContent({
   if (error) {
     const unauthorized = error instanceof ApiError && [401, 403].includes(error.status)
     return (
-      <section className="findings-state" role="alert">
-        <TriangleAlert aria-hidden="true" size={25} />
-        <div>
-          <p className="eyebrow">{unauthorized ? 'Access denied' : 'Findings unavailable'}</p>
-          <h2>{unauthorized ? 'Your session cannot access the findings API.' : 'We could not load findings.'}</h2>
-          <p>{error.message}</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={onRetry}>
-          Try again
-        </button>
-      </section>
+      <OperationalStatePanel
+        action={<button className="secondary-button" type="button" onClick={onRetry}>Try again</button>}
+        title={unauthorized ? 'Your session cannot access the findings API.' : 'We could not load findings.'}
+        tone="error"
+      >
+        <p>{error.message}</p>
+      </OperationalStatePanel>
     )
   }
   if (!findings) {
@@ -204,65 +197,75 @@ export function FindingsListContent({
   }
   if (findings.length === 0) {
     return (
-      <section className="findings-state findings-empty">
-        <SearchX aria-hidden="true" size={25} />
-        <div>
-          <p className="eyebrow">No matching findings</p>
-          <h2>This lifecycle and filter combination has no results.</h2>
-          <p>Try a different status or broaden the resource and severity filters.</p>
-        </div>
-      </section>
+      <OperationalStatePanel title="No matching findings" tone="empty">
+        <p>Try a different lifecycle status or broaden the resource and severity filters.</p>
+      </OperationalStatePanel>
     )
   }
 
   return (
-    <div className="finding-list" aria-label="Findings">
-      {findings.map((finding) => (
-        <FindingRow finding={finding} key={finding.finding_id} />
-      ))}
+    <div className="findings-table-scroll">
+      <table className="findings-table">
+        <caption className="sr-only">Cost optimization findings</caption>
+        <thead>
+          <tr>
+            <th scope="col">Resource</th>
+            <th scope="col">Recommendation</th>
+            <th scope="col">State</th>
+            <th scope="col">Savings</th>
+            <th scope="col">Last detected</th>
+            <th className="findings-table-action-heading" scope="col"><span className="sr-only">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {findings.map((finding) => <FindingRow finding={finding} key={finding.finding_id} />)}
+        </tbody>
+      </table>
     </div>
   )
 }
 
 function FindingRow({ finding }: { finding: Finding }) {
   return (
-    <article className="finding-row">
-      <div className="finding-row-main">
-        <div className="finding-row-heading">
-          <div>
-            <p className="finding-resource">{humanize(finding.resource.resource_type)}</p>
-            <h2>{finding.summary}</h2>
-          </div>
-          <div className="finding-badges">
-            <SeverityBadge severity={finding.severity} />
-            <StatusBadge status={finding.status} />
-          </div>
+    <tr>
+      <th className="finding-resource-cell" scope="row">
+        <span className="resource-type-badge">{humanize(finding.resource.resource_type)}</span>
+        <strong className="monospace-value">{finding.resource.resource_id}</strong>
+        <span>{finding.resource.region}</span>
+      </th>
+      <td className="finding-recommendation-cell">
+        <strong>{finding.summary}</strong>
+        <span>{finding.recommended_action}</span>
+      </td>
+      <td>
+        <div className="finding-badges">
+          <SeverityBadge severity={finding.severity} />
+          <StatusBadge status={finding.status} />
         </div>
-        <p className="finding-summary">{finding.recommended_action}</p>
-        <div className="finding-metadata">
-          <span>{finding.resource.resource_id}</span>
-          <span>{finding.resource.region}</span>
-          <span>Observed {finding.occurrence_count} time(s)</span>
-          <span>Last seen {formatDateTime(finding.last_detected_at)}</span>
-        </div>
-      </div>
-      <div className="finding-row-side">
+      </td>
+      <td className="finding-savings-cell">
         <strong>{formatCurrency(finding)}</strong>
-        <span>Potential monthly savings</span>
-        <Link className="text-link finding-link" to={`/findings/${encodeURIComponent(finding.finding_id)}`}>
-          Review finding <ChevronRight aria-hidden="true" size={16} />
+        <span>monthly estimate</span>
+      </td>
+      <td className="finding-date-cell">
+        <time dateTime={finding.last_detected_at}>{formatDateTime(finding.last_detected_at)}</time>
+        <span>Observed {finding.occurrence_count} time(s)</span>
+      </td>
+      <td className="finding-action-cell">
+        <Link className="secondary-button review-link" to={`/findings/${encodeURIComponent(finding.finding_id)}`}>
+          Review <ChevronRight aria-hidden="true" size={15} />
         </Link>
-      </div>
-    </article>
+      </td>
+    </tr>
   )
 }
 
 function FindingsLoading() {
   return (
-    <div aria-busy="true" aria-label="Loading findings" className="finding-list finding-list-loading">
-      {[0, 1, 2].map((index) => (
-        <div className="skeleton-block skeleton-finding" key={index} />
-      ))}
+    <div aria-busy="true" aria-label="Loading findings" className="findings-table-scroll">
+      <div className="findings-loading-table">
+        {[0, 1, 2, 3].map((index) => <div className="skeleton-block skeleton-finding" key={index} />)}
+      </div>
     </div>
   )
 }

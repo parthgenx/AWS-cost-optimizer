@@ -1,0 +1,82 @@
+name: Verify ARM64 SAM build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ARM64 Lambda artifacts
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: aws-actions/setup-sam@v2
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Build Lambda artifacts in native ARM64 containers
+        id: sam-build
+        shell: bash
+        run: |
+          set -uo pipefail
+          started_at="$(date +%s)"
+
+          if sam build --template-file infrastructure/template.yaml --use-container; then
+            build_exit_code=0
+          else
+            build_exit_code=$?
+          fi
+
+          finished_at="$(date +%s)"
+          build_duration_seconds=$((finished_at - started_at))
+          echo "SAM build duration: ${build_duration_seconds} seconds"
+          echo "build_duration_seconds=${build_duration_seconds}" >> "$GITHUB_OUTPUT"
+          echo "## ARM64 SAM build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Duration: ${build_duration_seconds} seconds" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$build_exit_code" -ne 0 ]]; then
+            echo "- Result: failed" >> "$GITHUB_STEP_SUMMARY"
+            exit "$build_exit_code"
+          fi
+
+      - name: Verify all Lambda artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          function_names=(
+            ApiFunction
+            EbsScannerFunction
+            ElasticIpScannerFunction
+            EbsSnapshotScannerFunction
+            Ec2UtilizationScannerFunction
+            RdsUtilizationScannerFunction
+            ApplicationLoadBalancerScannerFunction
+            EbsCleanupFunction
+          )
+
+          missing_artifacts=()
+          for function_name in "${function_names[@]}"; do
+            artifact_path=".aws-sam/build/${function_name}"
+            if [[ ! -d "$artifact_path" ]]; then
+              missing_artifacts+=("$artifact_path")
+            fi
+          done
+
+          if [[ "${#missing_artifacts[@]}" -gt 0 ]]; then
+            printf 'Missing Lambda artifacts:\n%s\n' "${missing_artifacts[@]}" >&2
+            exit 1
+          fi
+
+          echo "Verified all ${#function_names[@]} Lambda artifacts."
+          echo "- Artifacts: ${#function_names[@]}/8 verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: succeeded" >> "$GITHUB_STEP_SUMMARY"

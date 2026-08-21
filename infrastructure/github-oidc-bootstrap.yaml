@@ -4,8 +4,8 @@ Description: GitHub Actions OIDC deployment role and private SAM artifact bucket
 Parameters:
   GitHubOidcSubject:
     Type: String
-    Default: repo:parthgenx/AWS-cost-optimizer:environment:development
-    Description: Exact GitHub OIDC sub claim allowed to deploy. Keep this restricted to the protected development environment.
+    Default: repo:parthgenx@185112273/AWS-cost-optimizer@1319369019:environment:development
+    Description: Exact ID-inclusive GitHub OIDC sub claim allowed to deploy. Keep this restricted to this repository and the protected development environment.
 
 Resources:
   GitHubActionsOidcProvider:
